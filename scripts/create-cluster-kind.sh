@@ -8,6 +8,7 @@
 set -xo errexit
 
 . scripts/common.sh
+CRT_MGR_VERSION=1.19.2
 
 if [ "$(kind get clusters 2>/dev/null)" != "kind" ]; then
 	kind create cluster --config kind/config.yaml
@@ -51,3 +52,4 @@ data:
 EOF
 
 kubectl create -f  https://raw.githubusercontent.com/projectcalico/calico/v3.29.1/manifests/calico.yaml
+kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v${CRT_MGR_VERSION}/cert-manager.yaml
