@@ -22,11 +22,13 @@ use operator::OperatorContext;
 use operator::{generate_owner_reference, spawn_reflector, sync_cache, upsert_condition};
 use trusted_cluster_operator_lib::{
     ApprovedImage, AttestationKey, Machine, TrustedExecutionCluster, TrustedExecutionClusterStatus,
-    conditions::*, images::*, update_status,
+    conditions::*, images::*, machineconfigs::MachineConfig, update_status,
 };
 
 mod attestation_key_register;
 mod conditions;
+#[cfg(feature = "openshift")]
+mod mc_images;
 mod reference_values;
 mod register_server;
 #[cfg(test)]
@@ -265,6 +267,14 @@ async fn main() -> Result<()> {
     ctx.ak_store = ak_store;
     ctx.secret_store = secret_store;
     ctx.image_store = image_store;
+
+    #[cfg(feature = "openshift")]
+    {
+        let (mc_store, mc_writer) = reflector::store::<MachineConfig>();
+        spawn_cluster_reflector::<MachineConfig>(mc_writer, kube_client.clone(), "MachineConfig");
+        ctx.mc_store = mc_store;
+    }
+
     let ctx = Arc::new(ctx);
 
     // Best-effort wait for caches; controllers will work with
@@ -296,6 +306,8 @@ async fn main() -> Result<()> {
     reference_values::launch_rv_image_controller(ctx.clone()).await;
     reference_values::launch_rv_job_controller(ctx.clone()).await;
     trustee::launch_trustee_sync_controller(ctx.clone()).await;
+    #[cfg(feature = "openshift")]
+    mc_images::img::launch_rv_mcp_controller(ctx.clone()).await;
 
     Controller::new(cl, watcher::Config::default())
         .run(reconcile, controller_error_policy, ctx)

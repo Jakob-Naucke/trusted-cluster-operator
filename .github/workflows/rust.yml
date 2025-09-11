@@ -6,6 +6,8 @@
 
 # Inspired by https://github.com/coreos/repo-templates
 
+# TODO clippy with and without OpenShift
+
 name: "Rust"
 on:
   pull_request:
