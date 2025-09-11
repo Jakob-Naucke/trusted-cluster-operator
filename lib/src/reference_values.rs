@@ -8,6 +8,9 @@ use compute_pcrs_lib::Pcr;
 use compute_pcrs_lib::tpmevents::TPMEvent;
 use openssl::hash::{MessageDigest, hash};
 
+#[cfg(feature = "openshift")]
+pub const OSIMAGE_RESOURCE_PREFIX: &str = "osimage";
+
 /// Name resource by uniquified RFC1035 name with a prefix
 pub fn rfc1035(name: &str, prefix: &str) -> anyhow::Result<String> {
     if prefix.len() > 52 {
@@ -17,7 +20,8 @@ pub fn rfc1035(name: &str, prefix: &str) -> anyhow::Result<String> {
     let hash = hash(MessageDigest::sha1(), name.as_bytes())?;
     let hashed = hex::encode(hash)[..10].to_string();
     let formatted = format!("{prefix}-{hashed}-{replaced}");
-    Ok(formatted[..63].trim_end_matches('-').to_string())
+    let trimmed: String = formatted.chars().take(63).collect();
+    Ok(trimmed.trim_end_matches('-').to_string())
 }
 
 pub const IMAGE_VOLUME_MOUNTPOINT: &str = "/image";
