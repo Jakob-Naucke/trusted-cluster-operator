@@ -32,7 +32,7 @@ var (
 // +kubebuilder:rbac:groups=batch,resources=jobs,verbs=create;delete;list;watch
 // +kubebuilder:rbac:groups=trusted-execution-clusters.io,resources=trustedexecutionclusters,verbs=list;watch
 // +kubebuilder:rbac:groups=trusted-execution-clusters.io,resources=trustedexecutionclusters/status,verbs=patch
-// +kubebuilder:rbac:groups=trusted-execution-clusters.io,resources=machines,verbs=create;list;delete;watch
+// +kubebuilder:rbac:groups=trusted-execution-clusters.io,resources=machines,verbs=create;list;delete;watch;patch
 // +kubebuilder:rbac:groups=trusted-execution-clusters.io,resources=approvedimages,verbs=get;list;watch;patch
 // +kubebuilder:rbac:groups=trusted-execution-clusters.io,resources=approvedimages/status,verbs=patch
 

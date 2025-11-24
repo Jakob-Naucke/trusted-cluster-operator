@@ -241,3 +241,44 @@ async fn test_vm_reboot_attestation() -> anyhow::Result<()> {
     Ok(())
 }
 }
+
+virt_test! {
+async fn test_vm_reboot_delete_machine() -> anyhow::Result<()> {
+    use kube::Api;
+    use trusted_cluster_operator_lib::Machine;
+
+    let test_ctx = setup!().await?;
+    test_ctx.info("Testing Machine deletion - VM should no longer boot successfully when its Machine CRD was removed");
+    let vm_name = "test-coreos-delete";
+    let att_ctx = SingleAttestationContext::new(vm_name, &test_ctx).await?;
+
+    let machines: Api<Machine> = Api::namespaced(test_ctx.client().clone(), test_ctx.namespace());
+    let list = machines.list(&Default::default()).await?;
+    let name = list.items[0].metadata.name.as_ref().unwrap();
+    machines.delete(name, &Default::default()).await?;
+
+    test_ctx.info("Performing reboot, expecting missing resource");
+    let _reboot_result = virt::virtctl_ssh_exec(
+        test_ctx.namespace(),
+        vm_name,
+        &att_ctx.key_path,
+        "sudo systemctl reboot",
+    )
+    .await;
+
+    tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+
+    test_ctx.info("Waiting for SSH access after machine removal");
+    let wait = virt::wait_for_vm_ssh_ready(
+        test_ctx.namespace(),
+        vm_name,
+        &att_ctx.key_path,
+        300,
+    )
+    .await;
+    assert!(wait.is_err());
+
+    test_ctx.cleanup().await?;
+    Ok(())
+}
+}

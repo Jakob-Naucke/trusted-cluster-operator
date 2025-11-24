@@ -134,34 +134,67 @@ fn generate_secret_volume(id: &str) -> (Volume, VolumeMount) {
 }
 
 pub async fn mount_secret(client: Client, id: &str) -> Result<()> {
+    let result = do_mount_secret(client, id, true).await;
+    info!("Mounted secret {id} to {DEPLOYMENT_NAME}");
+    result
+}
+
+pub async fn unmount_secret(client: Client, id: &str) -> Result<()> {
+    let result = do_mount_secret(client, id, false).await;
+    info!("Unmounted secret {id} from {DEPLOYMENT_NAME}");
+    result
+}
+
+pub async fn do_mount_secret(client: Client, id: &str, add: bool) -> Result<()> {
     let deployments: Api<Deployment> = Api::default_namespaced(client);
     let mut deployment = deployments.get(DEPLOYMENT_NAME).await?;
     let err = format!("Deployment {DEPLOYMENT_NAME} existed, but had no spec");
     let depl_spec = deployment.spec.as_mut().context(err)?;
     let err = format!("Deployment {DEPLOYMENT_NAME} existed, but had no pod spec");
     let pod_spec = depl_spec.template.spec.as_mut().context(err)?;
-
-    let (volume, volume_mount) = generate_secret_volume(id);
-    pod_spec.volumes.get_or_insert_default().push(volume);
     let err = format!("Deployment {DEPLOYMENT_NAME} existed, but had no containers");
     let container = pod_spec.containers.get_mut(0).context(err)?;
     let vol_mounts = container.volume_mounts.get_or_insert_default();
-    vol_mounts.push(volume_mount);
+
+    if add {
+        let (volume, volume_mount) = generate_secret_volume(id);
+        pod_spec.volumes.get_or_insert_default().push(volume);
+        vol_mounts.push(volume_mount);
+    } else {
+        let vol_result = pod_spec.volumes.as_mut().and_then(|vs| {
+            let pos = vs.iter().position(|v| v.name == id);
+            pos.map(|p| vs.swap_remove(p))
+        });
+        if vol_result.is_none() {
+            info!("Secret {id} was to be dropped, but volume had already been removed");
+        }
+        let vol_mount_result = container.volume_mounts.as_mut().and_then(|vms| {
+            let pos = vms.iter().position(|v| v.name == id);
+            pos.map(|p| vms.swap_remove(p))
+        });
+        if vol_mount_result.is_none() {
+            info!("Secret {id} was to be dropped, but volume mount had already been removed");
+        }
+    }
 
     deployments
         .replace(DEPLOYMENT_NAME, &Default::default(), &deployment)
         .await?;
-    info!("Mounted secret {id} to {DEPLOYMENT_NAME}");
     Ok(())
 }
 
-pub async fn generate_secret(client: Client, id: &str) -> Result<()> {
+pub async fn generate_secret(
+    client: Client,
+    id: &str,
+    owner_reference: OwnerReference,
+) -> Result<()> {
     let secret_data = k8s_openapi::ByteString(generate_luks_key()?);
     let data = BTreeMap::from([("root".to_string(), secret_data)]);
 
     let secret = Secret {
         metadata: ObjectMeta {
             name: Some(id.to_string()),
+            owner_references: Some(vec![owner_reference]),
             ..Default::default()
         },
         data: Some(data),
@@ -369,6 +402,7 @@ mod tests {
     use crate::mock_client::*;
     use compute_pcrs_lib::Pcr;
     use http::{Method, Request, StatusCode};
+    use kube::client::Body;
 
     fn dummy_pcrs() -> ImagePcrs {
         ImagePcrs(BTreeMap::from([(
@@ -599,6 +633,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_unmount_secret() {
+        let clos = async |req: Request<Body>, ctr| match (ctr, req.method()) {
+            (0, &Method::GET) => {
+                let mut depl = dummy_deployment();
+                let spec = depl.spec.as_mut().unwrap();
+                let pod_spec = spec.template.spec.as_mut().unwrap();
+                pod_spec.volumes = Some(vec![Volume {
+                    name: "id".to_string(),
+                    ..Default::default()
+                }]);
+                let container = pod_spec.containers.get_mut(0).unwrap();
+                container.volume_mounts = Some(vec![VolumeMount {
+                    name: "id".to_string(),
+                    ..Default::default()
+                }]);
+                Ok(serde_json::to_string(&depl).unwrap())
+            }
+            (1, &Method::PUT) => {
+                let bytes = req.into_body().collect_bytes().await.unwrap().to_vec();
+                let body = String::from_utf8_lossy(&bytes);
+                assert!(!body.contains("id"));
+                Ok(serde_json::to_string(&dummy_deployment()).unwrap())
+            }
+            _ => panic!("unexpected API interaction: {req:?}, counter {ctr}"),
+        };
+        count_check!(2, clos, |client| {
+            assert!(unmount_secret(client, "id").await.is_ok());
+        });
+    }
+
+    #[tokio::test]
     async fn test_generate_att_policy_success() {
         let clos = |client| generate_attestation_policy(client, Default::default());
         test_create_success::<_, _, ConfigMap>(clos).await;
@@ -618,19 +683,19 @@ mod tests {
 
     #[tokio::test]
     async fn test_generate_secret_success() {
-        let clos = |client| generate_secret(client, "id");
+        let clos = |client| generate_secret(client, "id", Default::default());
         test_create_success::<_, _, Secret>(clos).await;
     }
 
     #[tokio::test]
     async fn test_generate_secret_already_exists() {
-        let clos = |client| generate_secret(client, "id");
+        let clos = |client| generate_secret(client, "id", Default::default());
         test_create_already_exists(clos).await;
     }
 
     #[tokio::test]
     async fn test_generate_secret_error() {
-        let clos = |client| generate_secret(client, "id");
+        let clos = |client| generate_secret(client, "id", Default::default());
         test_create_error(clos).await;
     }
 
