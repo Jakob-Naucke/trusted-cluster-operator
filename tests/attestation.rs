@@ -7,45 +7,69 @@ use trusted_cluster_operator_test_utils::*;
 #[cfg(feature = "virtualization")]
 use trusted_cluster_operator_test_utils::virt;
 
+#[cfg(feature = "virtualization")]
+struct SingleAttestationContext {
+    key_path: std::path::PathBuf,
+}
+
+#[cfg(feature = "virtualization")]
+impl SingleAttestationContext {
+    async fn new(vm_name: &str, test_ctx: &TestContext) -> anyhow::Result<Self> {
+        let client = test_ctx.client();
+        let namespace = test_ctx.namespace();
+
+        let (_private_key, public_key, key_path) = virt::generate_ssh_key_pair()?;
+        test_ctx.info(format!(
+            "Generated SSH key pair and added to ssh-agent: {:?}",
+            key_path
+        ));
+
+        let register_server_url = format!(
+            "http://register-server.{}.svc.cluster.local:8000/ignition-clevis-pin-trustee",
+            namespace
+        );
+        let image = "quay.io/trusted-execution-clusters/fedora-coreos-kubevirt:latest";
+
+        test_ctx.info(format!("Creating VM: {}", vm_name));
+        virt::create_kubevirt_vm(
+            client,
+            namespace,
+            vm_name,
+            &public_key,
+            &register_server_url,
+            image,
+        )
+        .await?;
+
+        test_ctx.info(format!("Waiting for VM {} to reach Running state", vm_name));
+        virt::wait_for_vm_running(client, namespace, vm_name, 300).await?;
+        test_ctx.info(format!("VM {} is Running", vm_name));
+
+        test_ctx.info(format!("Waiting for SSH access to VM {}", vm_name));
+        virt::wait_for_vm_ssh_ready(namespace, vm_name, &key_path, 300).await?;
+        test_ctx.info("SSH access is ready");
+
+        Ok(Self { key_path })
+    }
+}
+
+#[cfg(feature = "virtualization")]
+impl Drop for SingleAttestationContext {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.key_path);
+    }
+}
+
 virt_test! {
 async fn test_attestation() -> anyhow::Result<()> {
     let test_ctx = setup!().await?;
-    let client = test_ctx.client();
     let namespace = test_ctx.namespace();
-
-    let (_private_key, public_key, key_path) = virt::generate_ssh_key_pair()?;
-    test_ctx.info(format!("Generated SSH key pair and added to ssh-agent: {:?}", key_path));
-
     let vm_name = "test-coreos-vm";
-    let register_server_url = format!(
-        "http://register-server.{}.svc.cluster.local:8000/ignition-clevis-pin-trustee",
-        namespace
-    );
-    let image = "quay.io/trusted-execution-clusters/fedora-coreos-kubevirt:latest";
-
-    test_ctx.info(format!("Creating VM: {}", vm_name));
-    virt::create_kubevirt_vm(
-        client,
-        namespace,
-        vm_name,
-        &public_key,
-        &register_server_url,
-        image,
-    )
-    .await?;
-
-    test_ctx.info(format!("Waiting for VM {} to reach Running state", vm_name));
-    virt::wait_for_vm_running(client, namespace, vm_name, 300).await?;
-    test_ctx.info(format!("VM {} is Running", vm_name));
-
-    test_ctx.info(format!("Waiting for SSH access to VM {}", vm_name));
-    virt::wait_for_vm_ssh_ready(namespace, vm_name, &key_path, 300).await?;
-    test_ctx.info("SSH access is ready");
+    let att_ctx = SingleAttestationContext::new(vm_name, &test_ctx).await?;
 
     test_ctx.info("Verifying encrypted root device");
-    let has_encrypted_root = virt::verify_encrypted_root(namespace, vm_name, &key_path).await?;
-
-    let _ = std::fs::remove_file(&key_path);
+    let has_encrypted_root =
+        virt::verify_encrypted_root(namespace, vm_name, &att_ctx.key_path).await?;
 
     assert!(
         has_encrypted_root,
@@ -162,40 +186,14 @@ async fn test_parallel_vm_attestation() -> anyhow::Result<()> {
 virt_test! {
 async fn test_vm_reboot_attestation() -> anyhow::Result<()> {
     let test_ctx = setup!().await?;
-    let client = test_ctx.client();
     let namespace = test_ctx.namespace();
-
     test_ctx.info("Testing VM reboot - VM should successfully boot after multiple reboots");
-
-    let (_private_key, public_key, key_path) = virt::generate_ssh_key_pair()?;
-    test_ctx.info(format!("Generated SSH key pair: {:?}", key_path));
-
     let vm_name = "test-coreos-reboot";
-    let register_server_url = format!(
-        "http://register-server.{}.svc.cluster.local:8000/ignition-clevis-pin-trustee",
-        namespace
-    );
-    let image = "quay.io/trusted-execution-clusters/fedora-coreos-kubevirt:latest";
-
-    test_ctx.info(format!("Creating VM: {}", vm_name));
-    virt::create_kubevirt_vm(
-        client,
-        namespace,
-        vm_name,
-        &public_key,
-        &register_server_url,
-        image,
-    )
-    .await?;
-
-    test_ctx.info("Waiting for VM to reach Running state");
-    virt::wait_for_vm_running(client, namespace, vm_name, 300).await?;
-
-    test_ctx.info("Waiting for SSH access");
-    virt::wait_for_vm_ssh_ready(namespace, vm_name, &key_path, 300).await?;
+    let att_ctx = SingleAttestationContext::new(vm_name, &test_ctx).await?;
 
     test_ctx.info("Verifying initial encrypted root device");
-    let has_encrypted_root = virt::verify_encrypted_root(namespace, vm_name, &key_path).await?;
+    let has_encrypted_root =
+        virt::verify_encrypted_root(namespace, vm_name, &att_ctx.key_path).await?;
     assert!(
         has_encrypted_root,
         "VM should have encrypted root device on initial boot"
@@ -211,27 +209,27 @@ async fn test_vm_reboot_attestation() -> anyhow::Result<()> {
         let _reboot_result = virt::virtctl_ssh_exec(
             namespace,
             vm_name,
-            &key_path,
-            "sudo systemctl reboot"
-        ).await;
+            &att_ctx.key_path,
+            "sudo systemctl reboot",
+        )
+        .await;
 
         tokio::time::sleep(std::time::Duration::from_secs(10)).await;
 
         test_ctx.info(format!("Waiting for SSH access after reboot {}", i));
-        virt::wait_for_vm_ssh_ready(namespace, vm_name, &key_path, 300).await?;
+        virt::wait_for_vm_ssh_ready(namespace, vm_name, &att_ctx.key_path, 300).await?;
 
         // Verify encrypted root is still present after reboot
         test_ctx.info(format!("Verifying encrypted root after reboot {}", i));
-        let has_encrypted_root = virt::verify_encrypted_root(namespace, vm_name, &key_path).await?;
+        let has_encrypted_root =
+            virt::verify_encrypted_root(namespace, vm_name, &att_ctx.key_path).await?;
         assert!(
             has_encrypted_root,
-            "VM should have encrypted root device after reboot {}", i
+            "VM should have encrypted root device after reboot {}",
+            i
         );
         test_ctx.info(format!("Reboot {}: attestation successful", i));
     }
-
-    // Clean up SSH key
-    let _ = std::fs::remove_file(&key_path);
 
     test_ctx.info(format!(
         "VM successfully rebooted {} times with encrypted root device maintained",
