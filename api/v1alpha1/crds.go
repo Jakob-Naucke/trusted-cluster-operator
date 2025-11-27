@@ -42,15 +42,15 @@ var (
 type TrustedExecutionClusterSpec struct {
 	// Image reference to Trustee all-in-one image
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="Value is immutable"
-	TrusteeImage *string `json:"trusteeImage"`
+	TrusteeImage string `json:"trusteeImage"`
 
 	// Image reference to trusted-cluster-operator's compute-pcrs image
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="Value is immutable"
-	PcrsComputeImage *string `json:"pcrsComputeImage"`
+	PcrsComputeImage string `json:"pcrsComputeImage"`
 
 	// Image reference to trusted-cluster-operator's register-server image
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="Value is immutable"
-	RegisterServerImage *string `json:"registerServerImage"`
+	RegisterServerImage string `json:"registerServerImage"`
 
 	// Address where attester can connect to Trustee
 	// +optional
@@ -109,7 +109,7 @@ type TrustedExecutionClusterList struct {
 type MachineSpec struct {
 	// Machine ID, typically a UUID
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="Value is immutable"
-	Id *string `json:"id"`
+	Id string `json:"id"`
 }
 
 // MachineStatus defines the observed state of Machine.
@@ -158,7 +158,7 @@ type ApprovedImageSpec struct {
 	// +required
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="Value is immutable"
 	// +kubebuilder:validation:XValidation:rule="self.matches(r'.*@sha256:.*')",message="Image must be provided with a digest"
-	Reference *string `json:"image"`
+	Reference string `json:"image"`
 }
 
 // ApprovedImageStatus defines the observed state of ApprovedImage.

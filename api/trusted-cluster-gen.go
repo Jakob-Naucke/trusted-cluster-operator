@@ -138,9 +138,9 @@ func generateTrustedExecutionClusterCR(args *Args) error {
 			Namespace: args.namespace,
 		},
 		Spec: v1alpha1.TrustedExecutionClusterSpec{
-			TrusteeImage:        &args.trusteeImage,
-			PcrsComputeImage:    &args.pcrsComputeImage,
-			RegisterServerImage: &args.registerServerImage,
+			TrusteeImage:        args.trusteeImage,
+			PcrsComputeImage:    args.pcrsComputeImage,
+			RegisterServerImage: args.registerServerImage,
 			PublicTrusteeAddr:   nil,
 			TrusteeKbsPort:      0,
 			RegisterServerPort:  0,
@@ -176,7 +176,7 @@ func generateApprovedImageCR(args *Args) error {
 			Namespace: args.namespace,
 		},
 		Spec: v1alpha1.ApprovedImageSpec{
-			Reference: &args.approvedImage,
+			Reference: args.approvedImage,
 		},
 	}
 
