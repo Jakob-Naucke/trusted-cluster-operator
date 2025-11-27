@@ -18,7 +18,7 @@ use std::net::SocketAddr;
 use uuid::Uuid;
 use warp::{http::StatusCode, reply, Filter};
 
-use trusted_cluster_operator_lib::{Machine, MachineSpec, TrustedExecutionCluster};
+use trusted_cluster_operator_lib::*;
 
 #[derive(Parser)]
 #[command(name = "register-server")]
@@ -142,7 +142,8 @@ async fn create_machine(client: Client, uuid: &str, client_ip: &str) -> anyhow::
     let machine_list = machines.list(&Default::default()).await?;
 
     for existing_machine in machine_list.items {
-        if existing_machine.spec.address == client_ip {
+        let existing_address = existing_machine.status.and_then(|s| s.address);
+        if existing_address.map(|a| a == client_ip).unwrap_or(false) {
             if let Some(name) = &existing_machine.metadata.name {
                 info!("Found existing machine {name} with IP {client_ip}, deleting...");
                 machines.delete(name, &Default::default()).await?;
@@ -151,21 +152,30 @@ async fn create_machine(client: Client, uuid: &str, client_ip: &str) -> anyhow::
         }
     }
 
-    let machine_name = format!("machine-{uuid}");
+    let name = format!("machine-{uuid}");
     let machine = Machine {
         metadata: ObjectMeta {
-            name: Some(machine_name.clone()),
+            name: Some(name.clone()),
             ..Default::default()
         },
         spec: MachineSpec {
             id: uuid.to_string(),
-            address: client_ip.to_string(),
         },
-        status: None,
+        status: Some(MachineStatus {
+            address: Some(client_ip.to_string()),
+            conditions: None,
+        }),
     };
 
     machines.create(&Default::default(), &machine).await?;
-    info!("Created Machine: {machine_name} with IP: {client_ip}");
+    // create does not set status
+    let mut status_machine = machines.get_status(&name).await?;
+    status_machine.status = machine.status;
+    let status_data = serde_json::to_vec(&status_machine)?;
+    let params = Default::default();
+    machines.replace_status(&name, &params, status_data).await?;
+
+    info!("Created Machine: {name} with IP: {client_ip}");
     Ok(())
 }
 
