@@ -14,5 +14,6 @@ rust-version.workspace = true
 compute-pcrs-lib.workspace = true
 k8s-openapi.workspace = true
 kube.workspace = true
+schemars = "1.1.0"
 serde.workspace = true
 serde_json.workspace = true
