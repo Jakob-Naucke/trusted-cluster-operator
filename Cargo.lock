@@ -3770,6 +3770,7 @@ dependencies = [
  "compute-pcrs-lib",
  "k8s-openapi",
  "kube",
+ "schemars",
  "serde",
  "serde_json",
 ]
