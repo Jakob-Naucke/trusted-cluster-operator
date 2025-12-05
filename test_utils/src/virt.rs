@@ -5,10 +5,14 @@
 use ignition_config::v3_5::{
     Config, Dropin, File, Ignition, IgnitionConfig, Passwd, Resource, Storage, Systemd, Unit, User,
 };
+use k8s_openapi::apimachinery::pkg::util::intstr::IntOrString;
 use kube::Client;
+use kube::api::ObjectMeta;
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::Duration;
 use tokio::process::Command;
+use trusted_cluster_operator_lib::virtualmachines::*;
 
 use super::Poller;
 
@@ -131,7 +135,6 @@ pub fn generate_ignition_config(
 }
 
 /// Create a KubeVirt VirtualMachine with the specified configuration
-/// TODO create rust a create for KubeVirt virtual machines
 pub async fn create_kubevirt_vm(
     client: &Client,
     namespace: &str,
@@ -141,91 +144,85 @@ pub async fn create_kubevirt_vm(
     image: &str,
 ) -> anyhow::Result<()> {
     use kube::Api;
-    use kube::api::PostParams;
-    use kube::core::DynamicObject;
-    use kube::discovery;
 
     let ignition_config = generate_ignition_config(ssh_public_key, register_server_url);
     let ignition_json = serde_json::to_string(&ignition_config)?;
 
-    let vm_spec = serde_json::json!({
-        "apiVersion": "kubevirt.io/v1",
-        "kind": "VirtualMachine",
-        "metadata": {
-            "name": vm_name,
-            "namespace": namespace
+    let vm = VirtualMachine {
+        metadata: ObjectMeta {
+            name: Some(vm_name.to_string()),
+            namespace: Some(namespace.to_string()),
+            ..Default::default()
         },
-        "spec": {
-            "runStrategy": "Always",
-            "template": {
-                "metadata": {
-                    "annotations": {
-                        "kubevirt.io/ignitiondata": ignition_json
-                    }
-                },
-                "spec": {
-                    "domain": {
-                        "features": {
-                            "smm": {
-                                "enabled": true
-                            }
+        spec: VirtualMachineSpec {
+            run_strategy: Some("Always".to_string()),
+            template: VirtualMachineTemplate {
+                metadata: Some(BTreeMap::from([(
+                    "annotations".to_string(),
+                    serde_json::json!({"kubevirt.io/ignitiondata": ignition_json}),
+                )])),
+                spec: Some(VirtualMachineTemplateSpec {
+                    domain: VirtualMachineTemplateSpecDomain {
+                        features: Some(VirtualMachineTemplateSpecDomainFeatures {
+                            smm: Some(VirtualMachineTemplateSpecDomainFeaturesSmm {
+                                enabled: Some(true),
+                            }),
+                            ..Default::default()
+                        }),
+                        firmware: Some(VirtualMachineTemplateSpecDomainFirmware {
+                            bootloader: Some(VirtualMachineTemplateSpecDomainFirmwareBootloader {
+                                efi: Some(VirtualMachineTemplateSpecDomainFirmwareBootloaderEfi {
+                                    persistent: Some(true),
+                                    ..Default::default()
+                                }),
+                                ..Default::default()
+                            }),
+                            ..Default::default()
+                        }),
+                        devices: VirtualMachineTemplateSpecDomainDevices {
+                            disks: Some(vec![VirtualMachineTemplateSpecDomainDevicesDisks {
+                                name: "containerdisk".to_string(),
+                                disk: Some(VirtualMachineTemplateSpecDomainDevicesDisksDisk {
+                                    bus: Some("virtio".to_string()),
+                                    ..Default::default()
+                                }),
+                                ..Default::default()
+                            }]),
+                            tpm: Some(VirtualMachineTemplateSpecDomainDevicesTpm {
+                                persistent: Some(true),
+                                ..Default::default()
+                            }),
+                            rng: Some(VirtualMachineTemplateSpecDomainDevicesRng {}),
+                            ..Default::default()
                         },
-                        "firmware": {
-                            "bootloader": {
-                                "efi": {
-                                    "persistent": true
-                                }
-                            }
-                        },
-                        "devices": {
-                            "tpm": {
-                                "persistent": true
-                            },
-                            "disks": [
-                                {
-                                    "name": "containerdisk",
-                                    "disk": {
-                                        "bus": "virtio"
-                                    }
-                                }
-                            ],
-                            "rng": {}
-                        },
-                        "resources": {
-                            "requests": {
-                                "memory": "4096M"
-                            }
-                        }
+                        resources: Some(VirtualMachineTemplateSpecDomainResources {
+                            requests: Some(BTreeMap::from([(
+                                "memory".to_string(),
+                                IntOrString::String("4096M".to_string()),
+                            )])),
+                            ..Default::default()
+                        }),
+                        ..Default::default()
                     },
-                    "volumes": [
-                        {
-                            "name": "containerdisk",
-                            "containerDisk": {
-                                "image": image,
-                                "imagePullPolicy": "Always"
-                            }
-                        }
-                    ]
-                }
-            }
-        }
-    });
+                    volumes: Some(vec![VirtualMachineTemplateSpecVolumes {
+                        name: "containerdisk".to_string(),
+                        container_disk: Some(VirtualMachineTemplateSpecVolumesContainerDisk {
+                            image: image.to_string(),
+                            image_pull_policy: Some("Always".to_string()),
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    }]),
+                    ..Default::default()
+                }),
+            },
+            ..Default::default()
+        },
+        ..Default::default()
+    };
 
-    let discovery = discovery::Discovery::new(client.clone()).run().await?;
-
-    let apigroup = discovery
-        .groups()
-        .find(|g| g.name() == "kubevirt.io")
-        .ok_or_else(|| anyhow::anyhow!("kubevirt.io API group not found"))?;
-
-    let (ar, _caps) = apigroup
-        .recommended_kind("VirtualMachine")
-        .ok_or_else(|| anyhow::anyhow!("VirtualMachine kind not found"))?;
-
-    let api: Api<DynamicObject> = Api::namespaced_with(client.clone(), namespace, &ar);
-    let vm_object: DynamicObject = serde_json::from_value(vm_spec)?;
-
-    api.create(&PostParams::default(), &vm_object).await?;
+    let vms: Api<VirtualMachine> = Api::namespaced(client.clone(), namespace);
+    vms.create(&Default::default(), &vm).await?;
 
     Ok(())
 }
