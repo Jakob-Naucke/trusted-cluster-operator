@@ -3778,6 +3778,7 @@ name = "trusted-cluster-operator-test-utils"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "compute-pcrs-lib",
  "env_logger",
  "ignition-config",

@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: MIT
 
+use base64::Engine;
 use ignition_config::v3_5::{
     Config, Dropin, File, Ignition, IgnitionConfig, Passwd, Resource, Storage, Systemd, Unit, User,
 };
@@ -351,6 +352,7 @@ pub async fn verify_encrypted_root(
     namespace: &str,
     vm_name: &str,
     key_path: &Path,
+    encryption_key: &Vec<u8>,
 ) -> anyhow::Result<bool> {
     let output = virtctl_ssh_exec(namespace, vm_name, key_path, "lsblk -o NAME,TYPE -J").await?;
 
@@ -358,50 +360,27 @@ pub async fn verify_encrypted_root(
     let lsblk_output: serde_json::Value = serde_json::from_str(&output)?;
 
     // Look for a device with name "root" and type "crypt"
-    if let Some(blockdevices) = lsblk_output.get("blockdevices") {
-        if let Some(devices) = blockdevices.as_array() {
-            for device in devices {
-                // Check the device itself
-                if is_root_crypt_device(device) {
-                    return Ok(true);
-                }
-
-                // Check children devices recursively
-                if let Some(children) = device.get("children") {
-                    if let Some(children_arr) = children.as_array() {
-                        for child in children_arr {
-                            if is_root_crypt_device(child) {
-                                return Ok(true);
-                            }
-                            // Check nested children
-                            if let Some(nested_children) = child.get("children") {
-                                if let Some(nested_arr) = nested_children.as_array() {
-                                    for nested in nested_arr {
-                                        if is_root_crypt_device(nested) {
-                                            return Ok(true);
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+    let get_children = |val: &serde_json::Value| -> Vec<_> {
+        let children = val.get("children").and_then(|v| v.as_array());
+        children.map(|v| v.to_vec()).unwrap_or_default()
+    };
+    let devices = lsblk_output.get("blockdevices").and_then(|v| v.as_array());
+    for child in devices.into_iter().flatten().flat_map(get_children) {
+        if get_children(&child).iter().any(|nested| {
+            let name = nested.get("name").and_then(|n| n.as_str());
+            let dev_type = nested.get("type").and_then(|t| t.as_str());
+            name == Some("root") && dev_type == Some("crypt")
+        }) {
+            // Sidestep escaping quotes by encoding
+            let encoded = base64::engine::general_purpose::STANDARD.encode(encryption_key);
+            let cmd = format!(
+                "base64 -d <<< {encoded} |
+                 cryptsetup luksOpen --test-passphrase --key-file=- {child}"
+            );
+            let exec = virtctl_ssh_exec(namespace, vm_name, key_path, &cmd).await;
+            return exec.map(|_| true);
         }
     }
 
     Ok(false)
-}
-
-fn is_root_crypt_device(device: &serde_json::Value) -> bool {
-    let name = device.get("name").and_then(|n| n.as_str());
-    let dev_type = device.get("type").and_then(|t| t.as_str());
-
-    if let (Some(n), Some(t)) = (name, dev_type) {
-        if n == "root" && t == "crypt" {
-            return true;
-        }
-    }
-
-    false
 }

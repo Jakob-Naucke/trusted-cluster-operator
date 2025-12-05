@@ -2,6 +2,9 @@
 //
 // SPDX-License-Identifier: MIT
 
+use k8s_openapi::api::core::v1::Secret;
+use kube::Api;
+use trusted_cluster_operator_lib::{Machine, virtualmachineinstances::VirtualMachineInstance};
 use trusted_cluster_operator_test_utils::*;
 
 #[cfg(feature = "virtualization")]
@@ -10,6 +13,7 @@ use trusted_cluster_operator_test_utils::virt;
 #[cfg(feature = "virtualization")]
 struct SingleAttestationContext {
     key_path: std::path::PathBuf,
+    root_key: Vec<u8>,
 }
 
 #[cfg(feature = "virtualization")]
@@ -49,7 +53,22 @@ impl SingleAttestationContext {
         virt::wait_for_vm_ssh_ready(namespace, vm_name, &key_path, 300).await?;
         test_ctx.info("SSH access is ready");
 
-        Ok(Self { key_path })
+        let vmis: Api<VirtualMachineInstance> = Api::namespaced(client.clone(), namespace);
+        let vmi = vmis.get(vm_name).await?;
+        let interfaces = vmi.status.unwrap().interfaces.unwrap();
+        let ip = interfaces.first().unwrap().ip_address.clone().unwrap();
+
+        let machines: Api<Machine> = Api::namespaced(client.clone(), namespace);
+        let list = machines.list(&Default::default()).await?;
+        let retrieval = |m: &&Machine| m.status.as_ref().unwrap().address.clone().unwrap() == ip;
+        let machine = list.items.iter().find(retrieval).unwrap();
+        let machine_name = machine.metadata.name.clone().unwrap();
+
+        let secrets: Api<Secret> = Api::namespaced(client.clone(), namespace);
+        let secret = secrets.get(&machine_name).await?;
+        let root_key = secret.data.unwrap().get("root").unwrap().0.clone();
+
+        Ok(Self { key_path, root_key })
     }
 }
 
@@ -69,7 +88,7 @@ async fn test_attestation() -> anyhow::Result<()> {
 
     test_ctx.info("Verifying encrypted root device");
     let has_encrypted_root =
-        virt::verify_encrypted_root(namespace, vm_name, &att_ctx.key_path).await?;
+        virt::verify_encrypted_root(namespace, vm_name, &att_ctx.key_path, &att_ctx.root_key).await?;
 
     assert!(
         has_encrypted_root,
@@ -152,11 +171,17 @@ async fn test_parallel_vm_attestation() -> anyhow::Result<()> {
     ssh2_ready?;
     test_ctx.info("SSH access ready on both VMs");
 
+    let secrets: Api<Secret> = Api::namespaced(client.clone(), namespace);
+    let secret1 = secrets.get(vm1_name).await?;
+    let secret2 = secrets.get(vm2_name).await?;
+    let root_key1 = secret1.data.unwrap().get("root").unwrap().0.clone();
+    let root_key2 = secret2.data.unwrap().get("root").unwrap().0.clone();
+
     // Verify attestation on both VMs in parallel
     test_ctx.info("Verifying encrypted root on both VMs");
     let (vm1_encrypted, vm2_encrypted) = tokio::join!(
-        virt::verify_encrypted_root(namespace, vm1_name, &key_path1),
-        virt::verify_encrypted_root(namespace, vm2_name, &key_path2)
+        virt::verify_encrypted_root(namespace, vm1_name, &key_path1, &root_key1),
+        virt::verify_encrypted_root(namespace, vm2_name, &key_path2, &root_key2)
     );
 
     let vm1_has_encrypted_root = vm1_encrypted?;
@@ -193,7 +218,7 @@ async fn test_vm_reboot_attestation() -> anyhow::Result<()> {
 
     test_ctx.info("Verifying initial encrypted root device");
     let has_encrypted_root =
-        virt::verify_encrypted_root(namespace, vm_name, &att_ctx.key_path).await?;
+        virt::verify_encrypted_root(namespace, vm_name, &att_ctx.key_path, &att_ctx.root_key).await?;
     assert!(
         has_encrypted_root,
         "VM should have encrypted root device on initial boot"
@@ -222,7 +247,7 @@ async fn test_vm_reboot_attestation() -> anyhow::Result<()> {
         // Verify encrypted root is still present after reboot
         test_ctx.info(format!("Verifying encrypted root after reboot {}", i));
         let has_encrypted_root =
-            virt::verify_encrypted_root(namespace, vm_name, &att_ctx.key_path).await?;
+            virt::verify_encrypted_root(namespace, vm_name, &att_ctx.key_path, &att_ctx.root_key).await?;
         assert!(
             has_encrypted_root,
             "VM should have encrypted root device after reboot {}",
