@@ -44,7 +44,7 @@ macro_rules! test_info {
 }
 
 macro_rules! kube_apply {
-    ($file:expr, $test_name:expr, $log:literal $(, $kustomize:literal)?) => {
+    ($file:expr, $test_name:expr, $log:literal $(, kustomize = $kustomize:literal)? $(, fssa = $fssa:literal)?) => {
         test_info!($test_name, $log);
         #[allow(unused_mut)]
         let mut opt = "-f";
@@ -53,8 +53,15 @@ macro_rules! kube_apply {
                 opt = "-k";
             }
         )?
+        #[allow(unused_mut)]
+        let mut args = vec!["apply", opt, $file];
+        $(
+            if $fssa {
+                args.extend_from_slice(&["--server-side", "--force-conflicts"])
+            }
+        )?
         let apply_output = Command::new("kubectl")
-            .args(["apply", opt, $file])
+            .args(args)
             .output()
             .await?;
         if !apply_output.status.success() {
@@ -335,7 +342,12 @@ impl TestContext {
                 "TrustedExecutionCluster CRD already exists, skipping CRD creation"
             );
         } else {
-            kube_apply!(crd_temp_dir_str, &self.test_name, "Applying CRDs");
+            kube_apply!(
+                crd_temp_dir_str,
+                &self.test_name,
+                "Applying CRDs",
+                fssa = true
+            );
         }
 
         test_info!(&self.test_name, "Preparing RBAC manifests");
@@ -399,7 +411,12 @@ resources:
         let temp_kustomization_path = rbac_temp_dir.join("kustomization.yaml");
         std::fs::write(&temp_kustomization_path, kustomization_content)?;
 
-        kube_apply!(rbac_temp_dir_str, &self.test_name, "Applying RBAC", true);
+        kube_apply!(
+            rbac_temp_dir_str,
+            &self.test_name,
+            "Applying RBAC",
+            kustomize = true
+        );
 
         let manifests_path = Path::new(&self.manifests_dir);
         let operator_manifest_path = manifests_path.join("operator.yaml");
