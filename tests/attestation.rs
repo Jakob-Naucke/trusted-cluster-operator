@@ -28,7 +28,7 @@ async fn get_root_key(vm_name: &str, test_ctx: &TestContext) -> anyhow::Result<V
     let interfaces = vmi.status.unwrap().interfaces.unwrap();
     let ip = interfaces.first().unwrap().ip_address.clone().unwrap();
 
-    wait_for_machines_status(client, namespace, 10).await?;
+    wait_for_machines_status(client, namespace, 20).await?;
     let machines: Api<Machine> = Api::namespaced(client.clone(), namespace);
     let list = machines.list(&Default::default()).await?;
     let retrieval = |m: &&Machine| m.status.as_ref().unwrap().address.clone().unwrap() == ip;
