@@ -173,7 +173,7 @@ test-release: crds-rs
 
 integration-tests: crds-rs trusted-cluster-gen
 	RUST_LOG=info cargo test --test trusted_execution_cluster --test attestation \
-		--features virtualization -- --no-capture  --test-threads=1
+		--features virtualization -- --no-capture  --test-threads=3
 
 $(LOCALBIN):
 	mkdir -p $(LOCALBIN)
