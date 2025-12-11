@@ -161,16 +161,16 @@ async fn create_machine(client: Client, uuid: &str, client_ip: &str) -> anyhow::
         spec: MachineSpec {
             id: uuid.to_string(),
         },
-        status: Some(MachineStatus {
-            address: Some(client_ip.to_string()),
-            conditions: None,
-        }),
+        status: None,
     };
 
     machines.create(&Default::default(), &machine).await?;
     // create does not set status
     let mut status_machine = machines.get_status(&name).await?;
-    status_machine.status = machine.status;
+    status_machine.status = Some(MachineStatus {
+        address: Some(client_ip.to_string()),
+        conditions: None,
+    });
     let status_data = serde_json::to_vec(&status_machine)?;
     let params = Default::default();
     machines.replace_status(&name, &params, status_data).await?;
