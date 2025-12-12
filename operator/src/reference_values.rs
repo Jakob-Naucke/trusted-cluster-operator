@@ -346,7 +346,8 @@ pub async fn disallow_image(ctx: RvContextData, resource_name: &str) -> Result<(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mock_client::*;
+    use crate::test_utils::*;
+    use trusted_cluster_operator_test_utils::mock_client::*;
     use http::{Method, Request};
     use k8s_openapi::api::batch::v1::JobStatus;
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::Time;

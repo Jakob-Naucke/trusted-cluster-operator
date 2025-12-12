@@ -21,7 +21,7 @@ use trusted_cluster_operator_lib::{conditions::*, update_status};
 
 mod conditions;
 #[cfg(test)]
-mod mock_client;
+mod test_utils;
 mod reference_values;
 mod register_server;
 mod trustee;
@@ -190,7 +190,7 @@ mod tests {
     use trusted_cluster_operator_lib::TrustedExecutionClusterSpec;
 
     use super::*;
-    use crate::mock_client::*;
+    use trusted_cluster_operator_test_utils::mock_client::*;
 
     fn dummy_cluster() -> TrustedExecutionCluster {
         TrustedExecutionCluster {

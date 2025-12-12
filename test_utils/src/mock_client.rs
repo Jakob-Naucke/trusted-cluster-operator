@@ -3,19 +3,14 @@
 //
 // SPDX-License-Identifier: MIT
 
-use compute_pcrs_lib::Pcr;
 use http::{Method, Request, Response, StatusCode};
-use k8s_openapi::{api::core::v1::ConfigMap, chrono::Utc};
 use kube::{Client, client::Body, error::ErrorResponse};
-use operator::RvContextData;
 use serde::Serialize;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::{collections::BTreeMap, convert::Infallible, sync::Arc};
+use std::{convert::Infallible, sync::Arc};
 use tower::service_fn;
 
-use crate::trustee;
-use trusted_cluster_operator_lib::reference_values::{ImagePcr, ImagePcrs, PCR_CONFIG_FILE};
-
+#[macro_export]
 macro_rules! assert_kube_api_error {
     ($err:expr, $code:expr, $reason:expr, $message:expr, $status:expr) => {{
         let kube_error = $err
@@ -33,6 +28,7 @@ macro_rules! assert_kube_api_error {
     }};
 }
 
+#[macro_export]
 macro_rules! count_check {
     ($expected:literal, $closure:ident, |$client:ident| $body:block) => {
         use std::sync::atomic;
@@ -43,8 +39,7 @@ macro_rules! count_check {
     }
 }
 
-pub(crate) use assert_kube_api_error;
-pub(crate) use count_check;
+pub use count_check;
 
 async fn create_response<T: Future<Output = Result<String, StatusCode>>>(
     response: T,
@@ -147,55 +142,4 @@ pub async fn test_create_error<F: Fn(Client) -> S, S: Future<Output = anyhow::Re
         let msg = "internal server error";
         assert_kube_api_error!(err, 500, "ServerTimeout", msg, "Failure");
     });
-}
-
-pub fn dummy_pcrs() -> ImagePcrs {
-    ImagePcrs(BTreeMap::from([(
-        "cos".to_string(),
-        ImagePcr {
-            first_seen: Utc::now(),
-            pcrs: vec![
-                Pcr {
-                    id: 0,
-                    value: "pcr0_val".to_string(),
-                    parts: vec![],
-                },
-                Pcr {
-                    id: 1,
-                    value: "pcr1_val".to_string(),
-                    parts: vec![],
-                },
-            ],
-            reference: "ref".to_string(),
-        },
-    )]))
-}
-
-pub fn dummy_trustee_map() -> ConfigMap {
-    ConfigMap {
-        data: Some(BTreeMap::from([(
-            trustee::REFERENCE_VALUES_FILE.to_string(),
-            "[]".to_string(),
-        )])),
-        ..Default::default()
-    }
-}
-
-pub fn dummy_pcrs_map() -> ConfigMap {
-    let data = BTreeMap::from([(
-        PCR_CONFIG_FILE.to_string(),
-        serde_json::to_string(&dummy_pcrs()).unwrap(),
-    )]);
-    ConfigMap {
-        data: Some(data),
-        ..Default::default()
-    }
-}
-
-pub fn generate_rv_ctx(client: Client) -> RvContextData {
-    RvContextData {
-        client,
-        owner_reference: Default::default(),
-        pcrs_compute_image: String::new(),
-    }
 }
