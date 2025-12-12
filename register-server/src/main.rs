@@ -12,9 +12,9 @@ use ignition_config::v3_5::{
 };
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
 use kube::{Api, Client};
-use log::{error, info};
-use std::convert::Infallible;
+use log::{error, info, warn};
 use std::net::SocketAddr;
+use std::{convert::Infallible, time::Duration};
 use uuid::Uuid;
 use warp::{http::StatusCode, reply, Filter};
 
@@ -135,8 +135,21 @@ async fn register_handler(remote_addr: Option<SocketAddr>) -> Result<impl warp::
     ))
 }
 
-async fn create_machine(client: Client, uuid: &str, client_ip: &str) -> anyhow::Result<()> {
+async fn update_status(client: Client, name: &str, status: MachineStatus) -> anyhow::Result<()> {
     let machines: Api<Machine> = Api::default_namespaced(client);
+    let mut status_machine = machines.get_status(name).await?;
+    status_machine.status = Some(status);
+    let status_data = serde_json::to_vec(&status_machine)?;
+    let params = Default::default();
+    machines.replace_status(name, &params, status_data).await?;
+    Ok(())
+}
+
+async fn create_machine(client: Client, uuid: &str, client_ip: &str) -> anyhow::Result<()> {
+    const MAX_ATTEMPTS: u8 = 3;
+    const DELAY: Duration = Duration::from_secs(1);
+
+    let machines: Api<Machine> = Api::default_namespaced(client.clone());
 
     // Check for existing machines with the same IP
     let machine_list = machines.list(&Default::default()).await?;
@@ -165,18 +178,30 @@ async fn create_machine(client: Client, uuid: &str, client_ip: &str) -> anyhow::
     };
 
     machines.create(&Default::default(), &machine).await?;
-    // create does not set status
-    let mut status_machine = machines.get_status(&name).await?;
-    status_machine.status = Some(MachineStatus {
+
+    let status = MachineStatus {
         address: Some(client_ip.to_string()),
         conditions: None,
-    });
-    let status_data = serde_json::to_vec(&status_machine)?;
-    let params = Default::default();
-    machines.replace_status(&name, &params, status_data).await?;
-
-    info!("Created Machine: {name} with IP: {client_ip}");
-    Ok(())
+    };
+    // create does not set status, and is sometimes not yet synchronized
+    for attempt in 1..=MAX_ATTEMPTS {
+        match update_status(client.clone(), &name, status.clone()).await {
+            Ok(_) => {
+                info!("Created machine {name} with IP: {client_ip}");
+                return Ok(());
+            }
+            Err(e) => {
+                warn!(
+                    "Attempt {attempt} / {MAX_ATTEMPTS} \
+                     at updating status of machine {name} failed: {e}"
+                );
+                std::thread::sleep(DELAY);
+            }
+        }
+    }
+    machines.delete(&name, &Default::default()).await?;
+    let err = anyhow!("Setting status of new machine {name} failed, deleted Machine again");
+    Err(err)
 }
 
 #[tokio::main]
