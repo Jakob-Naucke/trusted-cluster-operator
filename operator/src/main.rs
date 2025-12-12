@@ -20,10 +20,10 @@ use trusted_cluster_operator_lib::{TrustedExecutionCluster, TrustedExecutionClus
 use trusted_cluster_operator_lib::{conditions::*, update_status};
 
 mod conditions;
-#[cfg(test)]
-mod test_utils;
 mod reference_values;
 mod register_server;
+#[cfg(test)]
+mod test_utils;
 mod trustee;
 
 use crate::conditions::*;

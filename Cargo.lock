@@ -2796,6 +2796,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "trusted-cluster-operator-lib",
+ "trusted-cluster-operator-test-utils",
  "uuid",
  "warp",
 ]

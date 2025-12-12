@@ -7,6 +7,7 @@ use http::{Method, Request, Response, StatusCode};
 use kube::api::ObjectMeta;
 use kube::{Client, client::Body, error::ErrorResponse};
 use serde::Serialize;
+use std::fmt::Debug;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::{convert::Infallible, sync::Arc};
 use tower::service_fn;
@@ -138,6 +139,23 @@ pub async fn test_create_already_exists<
     });
 }
 
+async fn test_error<
+    F: Fn(Client) -> S,
+    S: Future<Output = anyhow::Result<T>>,
+    T: Debug,
+    G: Fn(Request<Body>, u32) -> U + Send + Sync + 'static,
+    U: Future<Output = Result<String, StatusCode>> + Send + 'static,
+>(
+    action: F,
+    server: G,
+) {
+    count_check!(1, server, |client| {
+        let err = action(client).await.unwrap_err();
+        let msg = "internal server error";
+        assert_kube_api_error!(err, 500, "ServerTimeout", msg, "Failure");
+    });
+}
+
 pub async fn test_create_error<F: Fn(Client) -> S, S: Future<Output = anyhow::Result<()>>>(
     create: F,
 ) {
@@ -145,11 +163,15 @@ pub async fn test_create_error<F: Fn(Client) -> S, S: Future<Output = anyhow::Re
         &Method::POST => Err(StatusCode::INTERNAL_SERVER_ERROR),
         _ => panic!("unexpected API interaction: {req:?}"),
     };
-    count_check!(1, clos, |client| {
-        let err = create(client).await.unwrap_err();
-        let msg = "internal server error";
-        assert_kube_api_error!(err, 500, "ServerTimeout", msg, "Failure");
-    });
+    test_error(create, clos).await;
+}
+
+pub async fn test_get_error<F: Fn(Client) -> S, S: Future<Output = anyhow::Result<()>>>(get: F) {
+    let clos = async |req: Request<_>, _| match req.method() {
+        &Method::GET => Err(StatusCode::INTERNAL_SERVER_ERROR),
+        _ => panic!("unexpected API interaction: {req:?}"),
+    };
+    test_error(get, clos).await;
 }
 
 pub fn dummy_cluster() -> TrustedExecutionCluster {
