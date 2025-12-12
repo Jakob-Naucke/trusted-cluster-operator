@@ -220,3 +220,68 @@ async fn main() {
     info!("Starting server on http://localhost:{}", args.port);
     warp::serve(routes).run(([0, 0, 0, 0], args.port)).await;
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kube::api::ObjectList;
+    use trusted_cluster_operator_test_utils::mock_client::*;
+
+    fn dummy_clusters() -> ObjectList<TrustedExecutionCluster> {
+        ObjectList {
+            types: Default::default(),
+            metadata: Default::default(),
+            items: vec![TrustedExecutionCluster {
+                metadata: Default::default(),
+                spec: TrustedExecutionClusterSpec {
+                    pcrs_compute_image: "".to_string(),
+                    public_trustee_addr: Some("::".to_string()),
+                    register_server_image: "".to_string(),
+                    register_server_port: None,
+                    trustee_image: "".to_string(),
+                    trustee_kbs_port: None,
+                },
+                status: None,
+            }],
+        }
+    }
+
+    #[tokio::test]
+    async fn test_get_public_trustee_addr() {
+        let clos = async |_, _| Ok(serde_json::to_string(&dummy_clusters()).unwrap());
+        count_check!(1, clos, |client| {
+            assert_eq!(get_public_trustee_addr(client).await.unwrap(), "::".to_string());
+        });
+    }
+
+    #[tokio::test]
+    async fn test_get_public_trustee_addr_multiple() {
+        let clos = async |_, _| {
+            let mut clusters = dummy_clusters();
+            clusters.items.push(clusters.items[0].clone());
+            Ok(serde_json::to_string(&clusters).unwrap())
+        };
+        count_check!(1, clos, |client| {
+            let err = get_public_trustee_addr(client).await.err().unwrap();
+            assert!(err.to_string().contains("More than one"));
+        });
+    }
+
+    #[tokio::test]
+    async fn test_get_public_trustee_no_addr() {
+        let clos = async |_, _| {
+            let mut clusters = dummy_clusters();
+            clusters.items[0].spec.public_trustee_addr = None;
+            Ok(serde_json::to_string(&clusters).unwrap())
+        };
+        count_check!(1, clos, |client| {
+            let err = get_public_trustee_addr(client).await.err().unwrap();
+            assert!(err.to_string().contains("did not specify a public Trustee address"));
+        });
+    }
+
+    #[tokio::test]
+    async fn test_get_public_trustee_error() {
+        test_get_error(get_public_trustee_addr).await;
+    }
+}
