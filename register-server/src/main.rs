@@ -98,8 +98,22 @@ async fn get_public_trustee_addr(client: Client) -> anyhow::Result<String> {
     ))
 }
 
-async fn register_handler(remote_addr: Option<SocketAddr>) -> Result<impl warp::Reply, Infallible> {
+async fn do_register(client_ip: &str) -> anyhow::Result<serde_json::Value> {
     let id = Uuid::new_v4().to_string();
+    let kube_client = Client::try_default().await?;
+    create_machine(kube_client.clone(), &id, client_ip).await?;
+    info!("Machine created successfully: machine-{id}");
+    let public_addr = get_public_trustee_addr(kube_client).await?;
+    let ign = generate_ignition(&id, &public_addr);
+    let mut ign_json = serde_json::to_value(ign)?;
+    let err = "malformed Ignition config";
+    let ign_block = ign_json.get_mut("ignition").ok_or(anyhow!(err))?;
+    let version = ign_block.get_mut("version").ok_or(anyhow!(err))?;
+    *version = serde_json::Value::String("3.6.0-experimental".to_string());
+    Ok(ign_json)
+}
+
+async fn register_handler(remote_addr: Option<SocketAddr>) -> Result<impl warp::Reply, Infallible> {
     let client_ip = remote_addr
         .map(|addr| addr.ip().to_string())
         .unwrap_or_else(|| "unknown".to_string());
@@ -116,23 +130,11 @@ async fn register_handler(remote_addr: Option<SocketAddr>) -> Result<impl warp::
         Ok(reply::with_status(reply::json(&msg), code))
     };
 
-    let kube_client = match Client::try_default().await {
-        Ok(c) => c,
-        Err(e) => return internal_error(e.into()),
+    let json = match do_register(&client_ip).await {
+        Ok(j) => j,
+        Err(e) => return internal_error(e),
     };
-    match create_machine(kube_client.clone(), &id, &client_ip).await {
-        Ok(_) => info!("Machine created successfully: machine-{id}"),
-        Err(e) => return internal_error(e.context("Failed to create machine")),
-    }
-    let public_addr = match get_public_trustee_addr(kube_client).await {
-        Ok(a) => a,
-        Err(e) => return internal_error(e.context("Failed to get Trustee address")),
-    };
-
-    Ok(reply::with_status(
-        reply::json(&generate_ignition(&id, &public_addr)),
-        StatusCode::OK,
-    ))
+    Ok(reply::with_status(reply::json(&json), StatusCode::OK))
 }
 
 async fn create_machine(client: Client, uuid: &str, client_ip: &str) -> anyhow::Result<()> {
