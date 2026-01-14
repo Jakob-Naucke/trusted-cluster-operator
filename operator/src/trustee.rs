@@ -6,6 +6,7 @@
 
 use anyhow::{Context, Result};
 use base64::{Engine as _, engine::general_purpose};
+use chrono::{DateTime, Utc};
 use clevis_pin_trustee_lib::Key as ClevisKey;
 use k8s_openapi::api::apps::v1::{Deployment, DeploymentSpec};
 use k8s_openapi::api::core::v1::{
@@ -17,7 +18,6 @@ use k8s_openapi::apimachinery::pkg::{
     apis::meta::v1::{LabelSelector, OwnerReference},
     util::intstr::IntOrString,
 };
-use k8s_openapi::chrono::{DateTime, TimeDelta, Utc};
 use kube::{
     Api, Client, Resource,
     api::{ObjectMeta, Patch, PatchParams},
@@ -84,7 +84,7 @@ fn recompute_reference_values(image_pcrs: ImagePcrs) -> Vec<ReferenceValue> {
         .map(|(name, values)| ReferenceValue {
             version: "0.1.0".to_string(),
             name: format!("tpm_{name}"),
-            expiration: Utc::now() + TimeDelta::days(365),
+            expiration: Utc::now() + chrono::Duration::days(365),
             value: serde_json::Value::Array(values.to_vec()),
         })
         .collect()

@@ -9,6 +9,7 @@ pub mod reference_values;
 mod kopium;
 #[allow(clippy::all)]
 mod vendor_kopium;
+use k8s_openapi::jiff::Timestamp;
 pub use kopium::approvedimages::*;
 pub use kopium::attestationkeys::*;
 pub use kopium::ingresses as openshift_ingresses;
@@ -20,7 +21,6 @@ pub use vendor_kopium::virtualmachines;
 
 use conditions::*;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, Time};
-use k8s_openapi::chrono::Utc;
 
 #[macro_export]
 macro_rules! update_status {
@@ -53,7 +53,7 @@ pub fn committed_condition(reason: &str, generation: Option<i64>) -> Condition {
             _ => "",
         }
         .to_string(),
-        last_transition_time: Time(Utc::now()),
+        last_transition_time: Time(Timestamp::now()),
         observed_generation: generation,
     }
 }

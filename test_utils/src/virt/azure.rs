@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: MIT
 
 use anyhow::{Context, Result, anyhow};
-use k8s_openapi::chrono::{self, Utc};
 use serde_json::Value;
 use std::{env, time};
 use tokio::process::Command;
@@ -123,7 +122,7 @@ impl VmBackend for AzureBackend {
         self.az_rg(args).await.context(warn_frame(&err))?;
 
         // Schedule auto-shutdown to control costs if cleanup fails
-        let shutdown_time = Utc::now() + chrono::Duration::minutes(KEEP_ALIVE_MINUTES);
+        let shutdown_time = chrono::Utc::now() + chrono::Duration::minutes(KEEP_ALIVE_MINUTES);
         let shutdown_str = shutdown_time.format("%H%M").to_string();
         let mut args = vec!["vm", "auto-shutdown", "--name", vm];
         args.extend(["--time", &shutdown_str]);
