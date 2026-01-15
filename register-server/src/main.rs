@@ -7,6 +7,7 @@ use anyhow::{anyhow, Context};
 use axum::response::{IntoResponse, Json};
 use axum::{extract::ConnectInfo, http::StatusCode};
 use axum::{routing::get, Router};
+use axum_server::tls_openssl::OpenSSLConfig;
 use clap::Parser;
 use clevis_pin_trustee_lib::{Config as ClevisConfig, Server as ClevisServer};
 use env_logger::Env;
@@ -30,6 +31,10 @@ use trusted_cluster_operator_lib::{
 struct Args {
     #[arg(short, long, default_value = "8000")]
     port: u16,
+    #[arg(long)]
+    cert_path: Option<String>,
+    #[arg(long)]
+    key_path: Option<String>,
 }
 
 fn generate_ignition(id: &str, public_addr: &str) -> IgnitionConfig {
@@ -178,7 +183,13 @@ async fn main() {
     let service = app.into_make_service_with_connect_info::<SocketAddr>();
     info!("Starting server on http://{}", addr);
 
-    let run = axum_server::bind(addr).serve(service).await;
+    let run = if args.cert_path.is_some() && args.key_path.is_some() {
+        let config = OpenSSLConfig::from_pem_file(args.cert_path.unwrap(), args.key_path.unwrap())
+            .expect("invalid PEM files");
+        axum_server::bind_openssl(addr, config).serve(service).await
+    } else {
+        axum_server::bind(addr).serve(service).await
+    };
     run.expect("Server failed");
 }
 
