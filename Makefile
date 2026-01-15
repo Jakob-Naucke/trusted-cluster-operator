@@ -160,6 +160,9 @@ endif
 install-kubevirt:
 	scripts/install-kubevirt.sh
 
+pre-pull-images:
+	APPROVED_IMAGE=$(APPROVED_IMAGE) TRUSTEE_IMAGE=$(TRUSTEE_IMAGE) scripts/pre-pull-images.sh
+
 clean:
 	cargo clean
 	rm -rf bin manifests $(CRD_YAML_PATH) $(CRD_RS_PATH)
