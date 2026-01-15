@@ -3,14 +3,18 @@
 // SPDX-License-Identifier: MIT
 
 use k8s_openapi::api::apps::v1::Deployment;
-use k8s_openapi::api::core::v1::{ConfigMap, Namespace};
-use kube::api::DeleteParams;
+use k8s_openapi::api::core::v1::{ConfigMap, Namespace, Secret};
+use kube::api::{DeleteParams, ObjectMeta};
 use kube::{Api, Client};
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Once;
 use std::time::Duration;
 use tokio::process::Command;
+use trusted_cluster_operator_lib::certificates::{
+    Certificate, CertificateIssuerRef, CertificateSpec,
+};
+use trusted_cluster_operator_lib::issuers::{Issuer, IssuerCa, IssuerSpec};
 
 pub mod timer;
 pub use timer::Poller;
@@ -20,6 +24,9 @@ pub mod mock_client;
 pub mod virt;
 
 use compute_pcrs_lib::Pcr;
+
+const ROOT_SECRET: &str = "root-secret";
+const REG_SECRET: &str = "reg-srv-secret";
 
 pub fn compare_pcrs(actual: &[Pcr], expected: &[Pcr]) -> bool {
     if actual.len() != expected.len() {
@@ -242,6 +249,78 @@ impl TestContext {
             .await
     }
 
+    async fn set_certificates(&self) -> anyhow::Result<()> {
+        let root_issuer_name = "root-issuer";
+        let root_issuer = Issuer {
+            metadata: ObjectMeta {
+                name: Some(root_issuer_name.to_string()),
+                ..Default::default()
+            },
+            spec: IssuerSpec {
+                self_signed: Some(Default::default()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let issuers: Api<Issuer> = Api::namespaced(self.client.clone(), &self.test_namespace);
+        issuers.create(&Default::default(), &root_issuer).await?;
+        let root_cert = Certificate {
+            metadata: ObjectMeta {
+                name: Some("root-cert".to_string()),
+                ..Default::default()
+            },
+            spec: CertificateSpec {
+                secret_name: ROOT_SECRET.to_string(),
+                is_ca: Some(true),
+                issuer_ref: CertificateIssuerRef {
+                    name: root_issuer_name.to_string(),
+                    ..Default::default()
+                },
+                common_name: Some("selfsigned-ca".to_string()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let certs: Api<Certificate> = Api::namespaced(self.client.clone(), &self.test_namespace);
+        certs.create(&Default::default(), &root_cert).await?;
+        let issuer_name = "issuer";
+        let issuer = Issuer {
+            metadata: ObjectMeta {
+                name: Some(issuer_name.to_string()),
+                ..Default::default()
+            },
+            spec: IssuerSpec {
+                ca: Some(IssuerCa {
+                    secret_name: ROOT_SECRET.to_string(),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        issuers.create(&Default::default(), &issuer).await?;
+        let cert = Certificate {
+            metadata: ObjectMeta {
+                name: Some("reg-srv-cert".to_string()),
+                ..Default::default()
+            },
+            spec: CertificateSpec {
+                secret_name: REG_SECRET.to_string(),
+                issuer_ref: CertificateIssuerRef {
+                    name: issuer_name.to_string(),
+                    ..Default::default()
+                },
+                dns_names: Some(vec![format!("register-server.{}.svc.cluster.local", self.test_namespace)]),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        certs.create(&Default::default(), &cert).await?;
+        let secrets: Api<Secret> = Api::namespaced(self.client.clone(), &self.test_namespace);
+        wait_for_resource_created(&secrets, REG_SECRET, 15, 1).await?;
+        Ok(())
+    }
+
     async fn apply_operator_manifests(&self) -> anyhow::Result<()> {
         test_info!(
             &self.test_name,
@@ -315,6 +394,8 @@ impl TestContext {
                 "quay.io/trusted-execution-clusters/key-broker-service:20260106",
                 "-register-server-image",
                 "localhost:5000/trusted-execution-clusters/registration-server:latest",
+                "-register-server-secret",
+                REG_SECRET,
                 "-attestation-key-register-image",
                 "localhost:5000/trusted-execution-clusters/attestation-key-register:latest",
                 "-approved-image",
@@ -330,6 +411,7 @@ impl TestContext {
 
         test_info!(&self.test_name, "Manifests generated successfully");
 
+        self.set_certificates().await?;
         let crd_check_output = Command::new("kubectl")
             .args([
                 "get",
@@ -555,6 +637,19 @@ fn test_namespace_name() -> String {
     format!("test-{}", &uuid::Uuid::new_v4().to_string()[..8])
 }
 
+pub async fn wait_for_resource_created<K>(
+    api: &Api<K>,
+    resource_name: &str,
+    timeout_secs: u64,
+    interval_secs: u64,
+) -> anyhow::Result<()>
+where
+    K: kube::Resource<DynamicType = ()> + Clone + std::fmt::Debug,
+    K: k8s_openapi::serde::de::DeserializeOwned,
+{
+    wait_for_resource_state(api, resource_name, timeout_secs, interval_secs, true).await
+}
+
 pub async fn wait_for_resource_deleted<K>(
     api: &Api<K>,
     resource_name: &str,
@@ -565,23 +660,42 @@ where
     K: kube::Resource<DynamicType = ()> + Clone + std::fmt::Debug,
     K: k8s_openapi::serde::de::DeserializeOwned,
 {
+    wait_for_resource_state(api, resource_name, timeout_secs, interval_secs, false).await
+}
+
+async fn wait_for_resource_state<K>(
+    api: &Api<K>,
+    resource_name: &str,
+    timeout_secs: u64,
+    interval_secs: u64,
+    state: bool,
+) -> anyhow::Result<()>
+where
+    K: kube::Resource<DynamicType = ()> + Clone + std::fmt::Debug,
+    K: k8s_openapi::serde::de::DeserializeOwned,
+{
     let poller = Poller::new()
         .with_timeout(Duration::from_secs(timeout_secs))
         .with_interval(Duration::from_secs(interval_secs))
-        .with_error_message(format!("waiting for {resource_name} to be deleted"));
+        .with_error_message(format!(
+            "{resource_name} did not reach state {} after {timeout_secs} seconds",
+            if state { "created" } else { "deleted" }
+        ));
 
     poller
         .poll_async(|| {
             let api = api.clone();
             let name = resource_name.to_string();
             async move {
-                match api.get(&name).await {
-                    Ok(_) => Err("{name} still exists, retrying..."),
-                    Err(kube::Error::Api(ae)) if ae.code == 404 => Ok(()),
-                    Err(e) => {
-                        panic!("Unexpected error while fetching {name}: {e:?}");
+                let result = api.get(&name).await;
+                if let Err(kube::Error::Api(ae)) = &result {
+                    if ae.code != 404 {
+                        panic!("Unexpected error while fetching {name}: {ae:?}");
                     }
                 }
+                (result.is_err() ^ state)
+                    .then_some(())
+                    .ok_or(anyhow::anyhow!("{name} not in desired state: {result:?}"))
             }
         })
         .await

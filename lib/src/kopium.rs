@@ -4,5 +4,9 @@
 
 pub mod approvedimages;
 pub mod attestationkeys;
+pub mod certificaterequests;
+pub mod certificates;
+pub mod clusterissuers;
+pub mod issuers;
 pub mod machines;
 pub mod trustedexecutionclusters;

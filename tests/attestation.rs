@@ -51,7 +51,7 @@ impl SingleAttestationContext {
         ));
 
         let register_server_url = format!(
-            "http://register-server.{}.svc.cluster.local:8000/ignition-clevis-pin-trustee",
+            "https://register-server.{}.svc.cluster.local:8000/ignition-clevis-pin-trustee",
             namespace
         );
         let image = "quay.io/trusted-execution-clusters/fedora-coreos-kubevirt:2026-14-01";

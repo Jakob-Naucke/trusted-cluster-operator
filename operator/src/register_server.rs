@@ -3,19 +3,16 @@
 //
 // SPDX-License-Identifier: MIT
 
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow};
 use futures_util::StreamExt;
-use k8s_openapi::{
-    api::{
-        apps::v1::{Deployment, DeploymentSpec},
-        core::v1::{
-            Container, ContainerPort, PodSpec, PodTemplateSpec, Service, ServicePort, ServiceSpec,
-        },
-    },
-    apimachinery::pkg::{
-        apis::meta::v1::{LabelSelector, ObjectMeta, OwnerReference},
-        util::intstr::IntOrString,
-    },
+use k8s_openapi::api::apps::v1::{Deployment, DeploymentSpec};
+use k8s_openapi::api::core::v1::{
+    Container, ContainerPort, PodSpec, PodTemplateSpec, Secret, SecretVolumeSource, Service,
+    ServicePort, ServiceSpec, Volume, VolumeMount,
+};
+use k8s_openapi::apimachinery::pkg::{
+    apis::meta::v1::{LabelSelector, ObjectMeta, OwnerReference},
+    util::intstr::IntOrString,
 };
 use kube::runtime::{
     controller::{Action, Controller},
@@ -23,7 +20,7 @@ use kube::runtime::{
     finalizer::Event,
 };
 use kube::{Api, Client, Resource};
-use log::info;
+use log::{info, warn};
 use std::{collections::BTreeMap, sync::Arc};
 
 use crate::trustee;
@@ -33,16 +30,63 @@ use trusted_cluster_operator_lib::Machine;
 const INTERNAL_REGISTER_SERVER_PORT: i32 = 8000;
 /// Finalizer name to discard decryption keys when a machine is deleted
 const MACHINE_FINALIZER: &str = "finalizer.machine.trusted-execution-clusters.io";
+const TLS_DIR: &str = "/etc/tls";
+
+async fn read_certificates(
+    client: Client,
+    secret: &Option<String>,
+) -> Result<(Vec<String>, Vec<Volume>, Vec<VolumeMount>)> {
+    let mut args = vec![
+        "--port".to_string(),
+        INTERNAL_REGISTER_SERVER_PORT.to_string(),
+    ];
+    let mut volumes = Vec::new();
+    let mut volume_mounts = Vec::new();
+
+    let secrets: Api<Secret> = Api::default_namespaced(client.clone());
+    if secret.is_none() {
+        return Ok((args, volumes, volume_mounts));
+    }
+    let secret_name = secret.as_ref().unwrap();
+    let secret = secrets.get(secret_name).await;
+    if let Ok(secret) = secret {
+        let err = "TLS secret had no name";
+        let name = secret.metadata.name.context(err)?;
+        args.push("--cert-path".to_string());
+        args.push(format!("{TLS_DIR}/tls.crt"));
+        args.push("--key-path".to_string());
+        args.push(format!("{TLS_DIR}/tls.key"));
+        volumes.push(Volume {
+            name: name.clone(),
+            secret: Some(SecretVolumeSource {
+                secret_name: Some(name.clone()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        volume_mounts.push(VolumeMount {
+            name,
+            mount_path: TLS_DIR.to_string(),
+            ..Default::default()
+        });
+    } else {
+        warn!("Certificate secret {secret_name} was provided, but could not be retrieved");
+    }
+
+    Ok((args, volumes, volume_mounts))
+}
 
 pub async fn create_register_server_deployment(
     client: Client,
     owner_reference: OwnerReference,
     image: &str,
+    secret: &Option<String>,
 ) -> Result<()> {
     let name = "register-server";
     let app_label = "register-server";
     let labels = BTreeMap::from([("app".to_string(), app_label.to_string())]);
 
+    let (args, volumes, volume_mounts) = read_certificates(client.clone(), secret).await?;
     let deployment = Deployment {
         metadata: ObjectMeta {
             name: Some(name.to_string()),
@@ -69,12 +113,11 @@ pub async fn create_register_server_deployment(
                             container_port: INTERNAL_REGISTER_SERVER_PORT,
                             ..Default::default()
                         }]),
-                        args: Some(vec![
-                            "--port".to_string(),
-                            INTERNAL_REGISTER_SERVER_PORT.to_string(),
-                        ]),
+                        args: Some(args),
+                        volume_mounts: Some(volume_mounts),
                         ..Default::default()
                     }],
+                    volumes: Some(volumes),
                     ..Default::default()
                 }),
             },
@@ -173,13 +216,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_reg_server_depl_success() {
-        let clos = |client| create_register_server_deployment(client, Default::default(), "image");
+        let clos =
+            |client| create_register_server_deployment(client, Default::default(), "image", &None);
         test_create_success::<_, _, Deployment>(clos).await;
     }
 
     #[tokio::test]
     async fn test_create_reg_server_depl_error() {
-        let clos = |client| create_register_server_deployment(client, Default::default(), "image");
+        let clos =
+            |client| create_register_server_deployment(client, Default::default(), "image", &None);
         test_create_error(clos).await;
     }
 

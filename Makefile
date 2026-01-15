@@ -49,23 +49,25 @@ CRD_YAML_PATH = config/crd
 RBAC_YAML_PATH = config/rbac
 API_PATH = api/v1alpha1
 generate: $(CONTROLLER_GEN)
-	$(CONTROLLER_GEN) rbac:roleName=trusted-cluster-operator-role crd webhook paths="./..." \
-		output:crd:artifacts:config=$(CRD_YAML_PATH) \
-		output:rbac:artifacts:config=$(RBAC_YAML_PATH)
+	for paths in ./... github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1; do \
+		$(CONTROLLER_GEN) rbac:roleName=trusted-cluster-operator-role crd webhook paths=$$paths \
+			output:crd:artifacts:config=$(CRD_YAML_PATH) \
+			output:rbac:artifacts:config=$(RBAC_YAML_PATH); \
+	done
 
 RS_LIB_PATH = lib/src
 CRD_RS_PATH = $(RS_LIB_PATH)/kopium
 $(CRD_RS_PATH):
 	mkdir $(CRD_RS_PATH)
 
-YAML_PREFIX = trusted-execution-clusters.io_
-$(CRD_RS_PATH)/%.rs: $(CRD_YAML_PATH)/$(YAML_PREFIX)%.yaml $(KOPIUM) $(CRD_RS_PATH)
-	$(KOPIUM) -f $< > $@
+$(CRD_RS_PATH)/%.rs: $(CRD_YAML_PATH)/*_%.yaml $(KOPIUM) $(CRD_RS_PATH)
+	$(KOPIUM) -f $< --derive Default > $@
+	sed -i 'N; s/, Default)\]\n\(pub struct CertificateAdditionalOutputFormats\)/)]\n\1/; P; D' $@
 	rustfmt $@
 
-crds-rs: generate
+crds-rs: generate $(KOPIUM) $(CRD_RS_PATH)
 	$(MAKE) $(shell find $(CRD_YAML_PATH) -type f \
-		| sed -E 's|$(CRD_YAML_PATH)/$(YAML_PREFIX)(.*)\.yaml|$(CRD_RS_PATH)/\1.rs|')
+		| sed -E 's|$(CRD_YAML_PATH)/.*_(.*)\.yaml|$(CRD_RS_PATH)/\1.rs|')
 
 trusted-cluster-gen: api/trusted-cluster-gen.go
 	go build -o $@ $<

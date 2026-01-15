@@ -5,16 +5,21 @@
 
 use clevis_pin_trustee_lib::Key as ClevisKey;
 use ignition_config::v3_5::{
-    Config, Dropin, File, Ignition, IgnitionConfig, Passwd, Resource, Storage, Systemd, Unit, User,
+    Config, Dropin, File, Ignition, IgnitionConfig, Passwd, Resource, Security, SecurityTls,
+    Storage, Systemd, Unit, User,
 };
+use k8s_openapi::api::core::v1::Secret;
 use k8s_openapi::apimachinery::pkg::util::intstr::IntOrString;
 use kube::api::ObjectMeta;
 use kube::{Api, Client};
+use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::Duration;
 use tokio::process::Command;
 use trusted_cluster_operator_lib::virtualmachines::*;
+
+use crate::ROOT_SECRET;
 
 use super::Poller;
 
@@ -62,7 +67,9 @@ pub fn generate_ignition_config(
     ssh_public_key: &str,
     register_server_url: &str,
     namespace: &str,
+    ca_pem: &str,
 ) -> serde_json::Value {
+    let root_pem_encoded = utf8_percent_encode(ca_pem, NON_ALPHANUMERIC);
     // Create the ignition configuration
     let ignition = Ignition {
         version: "3.6.0-experimental".to_string(),
@@ -75,9 +82,15 @@ pub fn generate_ignition_config(
             }]),
             replace: None,
         }),
-        proxy: None,
-        security: None,
-        timeouts: None,
+        security: Some(Security {
+            tls: Some(SecurityTls {
+                certificate_authorities: Some(vec![Resource {
+                    source: Some(format!("data:,{root_pem_encoded}")),
+                    ..Default::default()
+                }]),
+            }),
+        }),
+        ..Default::default()
     };
 
     let mut user = User::new("core".to_string());
@@ -168,9 +181,14 @@ pub async fn create_kubevirt_vm(
     register_server_url: &str,
     image: &str,
 ) -> anyhow::Result<()> {
-    use kube::Api;
+    let secrets: Api<Secret> = Api::namespaced(client.clone(), namespace);
+    let root_secret = secrets.get(ROOT_SECRET).await?;
+    let root_secret_data = root_secret.data.unwrap();
+    let ca_pem_bytes = root_secret_data.get("ca.crt").unwrap();
+    let ca_pem = String::from_utf8(ca_pem_bytes.0.clone())?;
 
-    let ignition_config = generate_ignition_config(ssh_public_key, register_server_url, namespace);
+    let ignition_config =
+        generate_ignition_config(ssh_public_key, register_server_url, namespace, &ca_pem);
     let ignition_json = serde_json::to_string(&ignition_config)?;
 
     let vm = VirtualMachine {
