@@ -4,6 +4,9 @@
 // SPDX-License-Identifier: MIT
 
 use anyhow::{anyhow, Context};
+use axum::response::{IntoResponse, Json};
+use axum::{extract::ConnectInfo, http::StatusCode};
+use axum::{routing::get, Router};
 use clap::Parser;
 use clevis_pin_trustee_lib::{Config as ClevisConfig, Server as ClevisServer};
 use env_logger::Env;
@@ -13,10 +16,8 @@ use ignition_config::v3_5::{
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
 use kube::{Api, Client};
 use log::{error, info};
-use std::convert::Infallible;
 use std::net::SocketAddr;
 use uuid::Uuid;
-use warp::{http::StatusCode, reply, Filter};
 
 use trusted_cluster_operator_lib::{Machine, MachineSpec, TrustedExecutionCluster};
 
@@ -105,11 +106,9 @@ async fn get_public_trustee_addr(client: Client) -> anyhow::Result<String> {
     ))
 }
 
-async fn register_handler(remote_addr: Option<SocketAddr>) -> Result<impl warp::Reply, Infallible> {
+async fn register_handler(ConnectInfo(addr): ConnectInfo<SocketAddr>) -> impl IntoResponse {
     let id = Uuid::new_v4().to_string();
-    let client_ip = remote_addr
-        .map(|addr| addr.ip().to_string())
-        .unwrap_or_else(|| "unknown".to_string());
+    let client_ip = addr.ip().to_string();
 
     info!("Registration request from IP: {client_ip}");
 
@@ -120,7 +119,7 @@ async fn register_handler(remote_addr: Option<SocketAddr>) -> Result<impl warp::
             "code": code.as_u16(),
             "message": format!("{e:#}")
         });
-        Ok(reply::with_status(reply::json(&msg), code))
+        (code, Json(msg))
     };
 
     let kube_client = match Client::try_default().await {
@@ -136,10 +135,12 @@ async fn register_handler(remote_addr: Option<SocketAddr>) -> Result<impl warp::
         Err(e) => return internal_error(e.context("Failed to get Trustee address")),
     };
 
-    Ok(reply::with_status(
-        reply::json(&generate_ignition(&id, &public_addr)),
-        StatusCode::OK,
-    ))
+    let ignition = generate_ignition(&id, &public_addr);
+    let json = match serde_json::to_value(ignition) {
+        Ok(json) => json,
+        Err(e) => return internal_error(anyhow!("Failed to serialise Ignition: {e}")),
+    };
+    (StatusCode::OK, Json(json))
 }
 
 async fn create_machine(client: Client, uuid: &str, client_ip: &str) -> anyhow::Result<()> {
@@ -181,16 +182,14 @@ async fn main() {
     env_logger::Builder::from_env(Env::default().default_filter_or("info")).init();
 
     let args = Args::parse();
+    let app = Router::new().route("/ignition-clevis-pin-trustee", get(register_handler));
+    let addr = SocketAddr::from(([0, 0, 0, 0], args.port));
+    info!("Starting server on http://{}", addr);
 
-    let register_route = warp::path("ignition-clevis-pin-trustee")
-        .and(warp::get())
-        .and(warp::addr::remote())
-        .and_then(register_handler);
-
-    let routes = register_route;
-
-    info!("Starting server on http://localhost:{}", args.port);
-    warp::serve(routes).run(([0, 0, 0, 0], args.port)).await;
+    axum_server::bind(addr)
+        .serve(app.into_make_service_with_connect_info::<SocketAddr>())
+        .await
+        .expect("Server failed");
 }
 
 #[cfg(test)]
