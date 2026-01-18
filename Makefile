@@ -190,7 +190,8 @@ test-release: crds-rs
 	cargo test --workspace --bins --release
 
 integration-tests: generate trusted-cluster-gen crds-rs
-	RUST_LOG=info cargo test --test trusted_execution_cluster --test attestation \
+	RUST_LOG=info REGISTRY=$(REGISTRY) TAG=$(TAG) \
+		cargo test --test trusted_execution_cluster --test attestation \
 		--features virtualization -- --no-capture  --test-threads=$(INTEGRATION_TEST_THREADS)
 
 $(LOCALBIN):

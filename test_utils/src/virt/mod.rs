@@ -14,6 +14,7 @@ use std::{env, path::PathBuf, time::Duration};
 use trusted_cluster_operator_lib::Machine;
 
 use super::Poller;
+use crate::get_cluster_url;
 
 /// Environment variable name for selecting the VM provider
 pub const VIRT_PROVIDER_ENV: &str = "VIRT_PROVIDER";
@@ -77,8 +78,9 @@ pub fn generate_ssh_key_pair() -> Result<(String, PathBuf)> {
 pub fn generate_ignition(config: &VmConfig) -> serde_json::Value {
     use ignition_config::v3_5::*;
     let register_server_url = format!(
-        "http://register-server.{}.svc.cluster.local:8000/ignition-clevis-pin-trustee",
-        config.namespace
+        "http://register-server.{}.{}:8000/ignition-clevis-pin-trustee",
+        config.namespace,
+        get_cluster_url()
     );
     let ignition = Ignition {
         version: "3.6.0-experimental".to_string(),
@@ -124,8 +126,9 @@ pub fn generate_ignition(config: &VmConfig) -> serde_json::Value {
 
     let mut ignition_json = serde_json::to_value(&ignition_config).unwrap();
     let attestation_url = format!(
-        "http://attestation-key-register.{}.svc.cluster.local:8001/register-ak",
-        config.namespace
+        "http://attestation-key-register.{}.{}:8001/register-ak",
+        config.namespace,
+        get_cluster_url()
     );
 
     let ign_json = serde_json::json!({

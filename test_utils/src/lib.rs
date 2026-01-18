@@ -72,6 +72,10 @@ macro_rules! kube_apply {
     }
 }
 
+pub fn get_cluster_url() -> String {
+    std::env::var("CLUSTER_URL").unwrap_or_else(|_| "svc.cluster.local".to_string())
+}
+
 static INIT: Once = Once::new();
 
 pub struct TestContext {
@@ -300,6 +304,10 @@ impl TestContext {
                 trusted_cluster_gen_path.display()
             ));
         }
+        let repo = std::env::var("REGISTRY")
+            .unwrap_or_else(|_| "localhost:5000".to_string());
+        let tag = std::env::var("TAG")
+            .unwrap_or_else(|_| "latest".to_string());
 
         let manifest_gen_output = Command::new(&trusted_cluster_gen_path)
             .args([
@@ -308,15 +316,15 @@ impl TestContext {
                 "-output-dir",
                 &self.manifests_dir,
                 "-image",
-                "localhost:5000/trusted-execution-clusters/trusted-cluster-operator:latest",
+                &format!("{repo}/trusted-cluster-operator:{tag}"),
                 "-pcrs-compute-image",
-                "localhost:5000/trusted-execution-clusters/compute-pcrs:latest",
+                &format!("{repo}/compute-pcrs:{tag}"),
                 "-trustee-image",
                 "quay.io/trusted-execution-clusters/key-broker-service:20260106",
                 "-register-server-image",
-                "localhost:5000/trusted-execution-clusters/registration-server:latest",
+                &format!("{repo}/registration-server:{tag}"),
                 "-attestation-key-register-image",
-                "localhost:5000/trusted-execution-clusters/attestation-key-register:latest",
+                &format!("{repo}/attestation-key-register:{tag}"),
                 "-approved-image",
                 "quay.io/trusted-execution-clusters/fedora-coreos@sha256:79a0657399e6c67c7c95b8a09193d18e5675b5aa3cfb4d75ea5c8d4d53b2af74"
             ])
@@ -436,7 +444,7 @@ resources:
             &self.test_name,
             "Updating CR manifest with publicTrusteeAddr"
         );
-        let trustee_addr = format!("kbs-service.{}.svc.cluster.local:8080", ns);
+        let trustee_addr = format!("kbs-service.{}.{}:8080", ns, get_cluster_url());
         let cr_manifest_path = manifests_path.join("trusted_execution_cluster_cr.yaml");
 
         let cr_content = std::fs::read_to_string(&cr_manifest_path)?;
