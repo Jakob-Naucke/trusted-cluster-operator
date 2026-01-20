@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: MIT
 
+use anyhow::anyhow;
 use fs_extra::dir;
 use k8s_openapi::api::apps::v1::Deployment;
 use k8s_openapi::api::core::v1::{ConfigMap, Namespace};
@@ -71,6 +72,11 @@ macro_rules! kube_apply {
             return Err(anyhow::anyhow!("{} failed: {}", $log, stderr));
         }
     }
+}
+
+pub fn ensure_command(name: &str) -> anyhow::Result<()> {
+    let result = which::which(name).map(|_| ());
+    result.map_err(|_| anyhow!("Command {name} not found. Please install {name} first."))
 }
 
 static INIT: Once = Once::new();
