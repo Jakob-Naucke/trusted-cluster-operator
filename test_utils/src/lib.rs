@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: MIT
 
+use anyhow::anyhow;
 use fs_extra::dir;
 use k8s_openapi::api::apps::v1::Deployment;
 use k8s_openapi::api::core::v1::{ConfigMap, Namespace};
@@ -19,6 +20,8 @@ pub mod mock_client;
 pub mod virt;
 
 use compute_pcrs_lib::Pcr;
+
+const ANSI_RESET: &str = "\x1b[0m";
 
 pub fn compare_pcrs(actual: &[Pcr], expected: &[Pcr]) -> bool {
     if actual.len() != expected.len() {
@@ -38,8 +41,15 @@ pub fn compare_pcrs(actual: &[Pcr], expected: &[Pcr]) -> bool {
 macro_rules! test_info {
     ($test_name:expr, $($arg:tt)*) => {{
         const GREEN: &str = "\x1b[32m";
-        const RESET: &str = "\x1b[0m";
-        println!("{}INFO{}: {}: {}", GREEN, RESET, $test_name, format!($($arg)*));
+        println!("{}INFO{}: {}: {}", GREEN, ANSI_RESET, $test_name, format!($($arg)*));
+    }}
+}
+
+#[macro_export]
+macro_rules! test_warn {
+    ($test_name:expr, $($arg:tt)*) => {{
+        const YELLOW: &str = "\x1b[33m";
+        println!("{}WARN{}: {}: {}", YELLOW, ANSI_RESET, $test_name, format!($($arg)*));
     }}
 }
 
@@ -69,6 +79,11 @@ macro_rules! kube_apply {
             return Err(anyhow::anyhow!("{} failed: {}", $log, stderr));
         }
     }
+}
+
+pub fn ensure_command(name: &str) -> anyhow::Result<()> {
+    let result = which::which(name).map(|_| ());
+    result.map_err(|_| anyhow!("Command {name} not found. Please install {name} first."))
 }
 
 trait K8sPlatform {
@@ -155,6 +170,10 @@ impl TestContext {
 
     pub fn info(&self, message: impl std::fmt::Display) {
         test_info!(&self.test_name, "{}", message);
+    }
+
+    pub fn warn(&self, message: impl std::fmt::Display) {
+        test_warn!(&self.test_name, "{}", message);
     }
 
     pub async fn cleanup(&self) -> anyhow::Result<()> {
