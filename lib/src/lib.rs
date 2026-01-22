@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: MIT
 
 pub mod conditions;
+pub mod endpoints;
 pub mod reference_values;
 
 mod kopium;
@@ -11,6 +12,7 @@ mod vendor_kopium;
 pub use kopium::approvedimages::*;
 pub use kopium::attestationkeys::*;
 pub use kopium::machines::*;
+pub use kopium::routes;
 pub use kopium::trustedexecutionclusters::*;
 pub use vendor_kopium::virtualmachineinstances;
 pub use vendor_kopium::virtualmachines;

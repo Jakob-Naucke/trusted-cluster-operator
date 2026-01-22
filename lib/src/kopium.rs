@@ -5,4 +5,5 @@
 pub mod approvedimages;
 pub mod attestationkeys;
 pub mod machines;
+pub mod routes;
 pub mod trustedexecutionclusters;

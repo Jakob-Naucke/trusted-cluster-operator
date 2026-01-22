@@ -30,6 +30,7 @@ ATTESTATION_KEY_REGISTER_IMAGE=$(REGISTRY)/attestation-key-register:$(TAG)
 TRUSTEE_IMAGE ?= quay.io/trusted-execution-clusters/key-broker-service:20260106
 # tagged as 2026-01-20-attestation
 APPROVED_IMAGE ?= quay.io/trusted-execution-clusters/fedora-coreos@sha256:79a0657399e6c67c7c95b8a09193d18e5675b5aa3cfb4d75ea5c8d4d53b2af74
+TEST_IMAGE ?= quay.io/trusted-execution-clusters/fedora-coreos-kubevirt:2026-14-01
 
 BUILD_TYPE ?= release
 IMAGE_BUILD_OPTION ?=
@@ -51,23 +52,24 @@ CRD_YAML_PATH = config/crd
 RBAC_YAML_PATH = config/rbac
 API_PATH = api/v1alpha1
 generate: $(CONTROLLER_GEN)
-	$(CONTROLLER_GEN) rbac:roleName=trusted-cluster-operator-role crd webhook paths="./..." \
-		output:crd:artifacts:config=$(CRD_YAML_PATH) \
-		output:rbac:artifacts:config=$(RBAC_YAML_PATH)
+	for paths in ./... github.com/openshift/api/route/v1; do \
+		$(CONTROLLER_GEN) rbac:roleName=trusted-cluster-operator-role crd webhook paths=$$paths \
+			output:crd:artifacts:config=$(CRD_YAML_PATH) \
+			output:rbac:artifacts:config=$(RBAC_YAML_PATH); \
+	done
 
 RS_LIB_PATH = lib/src
 CRD_RS_PATH = $(RS_LIB_PATH)/kopium
 $(CRD_RS_PATH):
 	mkdir $(CRD_RS_PATH)
 
-YAML_PREFIX = trusted-execution-clusters.io_
-$(CRD_RS_PATH)/%.rs: $(CRD_YAML_PATH)/$(YAML_PREFIX)%.yaml $(KOPIUM) $(CRD_RS_PATH)
+$(CRD_RS_PATH)/%.rs: $(CRD_YAML_PATH)/*_%.yaml $(KOPIUM) $(CRD_RS_PATH)
 	$(KOPIUM) -f $< > $@
 	rustfmt $@
 
-crds-rs: generate
+crds-rs: generate $(KOPIUM) $(CRD_RS_PATH)
 	$(MAKE) $(shell find $(CRD_YAML_PATH) -type f \
-		| sed -E 's|$(CRD_YAML_PATH)/$(YAML_PREFIX)(.*)\.yaml|$(CRD_RS_PATH)/\1.rs|')
+		| sed -E 's|$(CRD_YAML_PATH)/.*_(.*)\.yaml|$(CRD_RS_PATH)/\1.rs|')
 
 trusted-cluster-gen: api/trusted-cluster-gen.go
 	go build -o $@ $<
@@ -192,8 +194,10 @@ test-release: crds-rs
 	cargo test --workspace --bins --release
 
 integration-tests: generate trusted-cluster-gen crds-rs
-	RUST_LOG=info cargo test --test trusted_execution_cluster --test attestation \
-		--features virtualization -- --no-capture  --test-threads=$(INTEGRATION_TEST_THREADS)
+	RUST_LOG=info REGISTRY=$(REGISTRY) TAG=$(TAG) \
+		TRUSTEE_IMAGE=$(TRUSTEE_IMAGE) APPROVED_IMAGE=$(APPROVED_IMAGE) TEST_IMAGE=$(TEST_IMAGE) \
+		cargo test --test trusted_execution_cluster --test attestation \
+		--features virtualization -- --nocapture --test-threads=$(INTEGRATION_TEST_THREADS)
 
 $(LOCALBIN):
 	mkdir -p $(LOCALBIN)
