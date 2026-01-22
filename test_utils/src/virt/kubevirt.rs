@@ -19,7 +19,7 @@ pub struct KubevirtBackend(pub VmConfig);
 #[async_trait::async_trait]
 impl VmBackend for KubevirtBackend {
     async fn create_vm(&self) -> Result<()> {
-        let ignition_json = generate_ignition(&self.0, true);
+        let ignition_json = generate_ignition(&self.0, true).await?;
         let vm = VirtualMachine {
             metadata: ObjectMeta {
                 name: Some(self.0.vm_name.clone()),
