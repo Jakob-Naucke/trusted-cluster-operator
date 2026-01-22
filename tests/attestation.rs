@@ -13,7 +13,9 @@ use kube::Api;
 use trusted_cluster_operator_lib::Machine;
 use trusted_cluster_operator_test_utils::virt::{self, VmBackend};
 
-const ENCRYPTED_ROOT_ASSERT: &str = "should have an encrypted root device (attestation failed)";
+const ENCRYPTED_ROOT_ASSERT: &str = "should have an encrypted root device (attestation failed). \
+                                     This test is known to fail on NAT-based networks because the \
+                                     decryption secret cannot be traced back to a unique IP address.";
 
 struct SingleAttestationContext {
     root_key: Vec<u8>,
