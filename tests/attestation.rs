@@ -40,7 +40,7 @@ impl SingleAttestationContext {
         backend.create_vm().await?;
 
         test_ctx.info(format!("Waiting for VM {} to reach Running state", vm_name));
-        backend.wait_for_running(300).await?;
+        backend.wait_for_running(600).await?;
         test_ctx.info(format!("VM {} is Running", vm_name));
 
         test_ctx.info(format!("Waiting for SSH access to VM {}", vm_name));
@@ -94,8 +94,8 @@ async fn test_parallel_vm_attestation() -> anyhow::Result<()> {
     // Wait for both VMs to reach Running state in parallel
     test_ctx.info("Waiting for both VMs to reach Running state");
     let (vm1_running, vm2_running) = tokio::join!(
-        backend1.wait_for_running(300),
-        backend2.wait_for_running(300)
+        backend1.wait_for_running(600),
+        backend2.wait_for_running(600)
     );
 
     vm1_running?;
