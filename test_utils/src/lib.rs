@@ -38,6 +38,7 @@ const ANSI_RESET: &str = "\x1b[0m";
 
 const ROOT_SECRET: &str = "root-secret";
 const REG_SECRET: &str = "reg-srv-secret";
+const TRUSTEE_SECRET: &str = "trustee-secret";
 
 pub fn compare_pcrs(actual: &[Pcr], expected: &[Pcr]) -> bool {
     if actual.len() != expected.len() {
@@ -517,9 +518,12 @@ impl TestContext {
         let svc = REGISTER_SERVER_SERVICE;
         self.create_certificate(svc, "reg-srv-cert", REG_SECRET, issuer_name)
             .await?;
+        self.create_certificate(TRUSTEE_SERVICE, "trustee-cert", TRUSTEE_SECRET, issuer_name)
+            .await?;
 
         let secrets: Api<Secret> = Api::namespaced(self.client.clone(), &self.test_namespace);
         wait_for_resource_created(&secrets, REG_SECRET, 15, 1).await?;
+        wait_for_resource_created(&secrets, TRUSTEE_SECRET, 15, 1).await?;
         Ok(())
     }
 
@@ -581,6 +585,7 @@ impl TestContext {
         args.extend(&["-trustee-image", &trustee_image]);
         args.extend(&["-register-server-image", &reg_srv_img]);
         args.extend(&["-register-server-secret", REG_SECRET]);
+        args.extend(&["-trustee-secret", TRUSTEE_SECRET]);
         args.extend(&["-attestation-key-register-image", &att_reg_img]);
         args.extend(&["-approved-image", &approved_image]);
         let manifest_gen = Command::new(&trusted_cluster_gen_path).args(args).output();

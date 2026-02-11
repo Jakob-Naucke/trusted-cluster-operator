@@ -14,6 +14,7 @@ use env_logger::Env;
 use ignition_config::v3_5::{
     Clevis, ClevisCustom, Config as IgnitionConfig, Filesystem, Luks, Storage,
 };
+use k8s_openapi::api::core::v1::Secret;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{ObjectMeta, OwnerReference};
 use kube::{Api, Client};
 use log::{error, info};
@@ -24,6 +25,14 @@ use trusted_cluster_operator_lib::endpoints::REGISTER_SERVER_RESOURCE;
 use trusted_cluster_operator_lib::{
     generate_owner_reference, get_trusted_execution_cluster, Machine, MachineSpec,
 };
+
+/// Information about the Trustee server for clevis configuration
+struct TrusteeInfo {
+    /// The public address of the Trustee server
+    public_addr: String,
+    /// The CA certificate (PEM-encoded) if TLS is enabled, None otherwise
+    ca_cert: Option<String>,
+}
 
 #[derive(Parser)]
 #[command(name = "register-server")]
@@ -37,11 +46,15 @@ struct Args {
     key_path: Option<String>,
 }
 
-fn generate_ignition(id: &str, public_addr: &str) -> IgnitionConfig {
+fn generate_ignition(id: &str, trustee_info: &TrusteeInfo) -> IgnitionConfig {
+    let (scheme, cert) = match &trustee_info.ca_cert {
+        Some(ca_cert) => ("https", ca_cert.clone()),
+        None => ("http", String::new()),
+    };
     let clevis_conf = ClevisConfig {
         servers: vec![ClevisServer {
-            url: format!("http://{public_addr}"),
-            cert: "".to_string(),
+            url: format!("{scheme}://{}", trustee_info.public_addr),
+            cert,
         }],
         path: format!("default/{id}/root"),
         num_retries: None,
@@ -88,13 +101,30 @@ fn generate_ignition(id: &str, public_addr: &str) -> IgnitionConfig {
     }
 }
 
-async fn get_public_trustee_addr(client: Client) -> anyhow::Result<String> {
-    let cluster = get_trusted_execution_cluster(client).await?;
+async fn get_trustee_info(client: Client) -> anyhow::Result<TrusteeInfo> {
+    let cluster = get_trusted_execution_cluster(client.clone()).await?;
     let name = cluster.metadata.name.as_deref().unwrap_or("<no name>");
-    cluster.spec.public_trustee_addr.context(format!(
+    let public_addr = cluster.spec.public_trustee_addr.context(format!(
         "TrustedExecutionCluster {name} did not specify a public Trustee address. \
          Add an address and re-register the node."
-    ))
+    ))?;
+
+    let ca_cert = if let Some(secret_name) = &cluster.spec.trustee_secret {
+        let secrets: Api<Secret> = Api::default_namespaced(client);
+        let secret = secrets.get(secret_name).await?;
+        let err = format!("Trustee secret {secret_name} does not contain ca.crt");
+        let ca_data = secret.data.as_ref();
+        let ca_bytes = ca_data.and_then(|data| data.get("ca.crt")).expect(&err);
+        let ca_pem = String::from_utf8(ca_bytes.0.clone())?;
+        Some(ca_pem)
+    } else {
+        None
+    };
+
+    Ok(TrusteeInfo {
+        public_addr,
+        ca_cert,
+    })
 }
 
 async fn register_handler(ConnectInfo(addr): ConnectInfo<SocketAddr>) -> impl IntoResponse {
@@ -133,12 +163,12 @@ async fn register_handler(ConnectInfo(addr): ConnectInfo<SocketAddr>) -> impl In
         Ok(_) => info!("Machine created successfully: machine-{id}"),
         Err(e) => return internal_error(e.context("Failed to create machine")),
     }
-    let public_addr = match get_public_trustee_addr(kube_client).await {
-        Ok(a) => a,
-        Err(e) => return internal_error(e.context("Failed to get Trustee address")),
+    let trustee_info = match get_trustee_info(kube_client).await {
+        Ok(info) => info,
+        Err(e) => return internal_error(e.context("Failed to get Trustee info")),
     };
 
-    let ignition = generate_ignition(&id, &public_addr);
+    let ignition = generate_ignition(&id, &trustee_info);
     let json = match serde_json::to_value(ignition) {
         Ok(json) => json,
         Err(e) => return internal_error(anyhow!("Failed to serialise Ignition: {e}")),
@@ -211,57 +241,58 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_get_public_trustee_addr() {
+    async fn test_get_trustee_info() {
         let clos = async |_, _| Ok(serde_json::to_string(&dummy_clusters()).unwrap());
         count_check!(1, clos, |client| {
-            let addr = get_public_trustee_addr(client).await.unwrap();
-            assert_eq!(addr, "::".to_string());
+            let info = get_trustee_info(client).await.unwrap();
+            assert_eq!(info.public_addr, "::".to_string());
+            assert!(info.ca_cert.is_none());
         });
     }
 
     #[tokio::test]
-    async fn test_get_public_trustee_addr_none() {
+    async fn test_get_trustee_info_no_cluster() {
         let clos = async |_, _| {
             let mut clusters = dummy_clusters();
             clusters.items.clear();
             Ok(serde_json::to_string(&clusters).unwrap())
         };
         count_check!(1, clos, |client| {
-            let err = get_public_trustee_addr(client).await.err().unwrap();
+            let err = get_trustee_info(client).await.err().unwrap();
             assert!(err.to_string().contains("No TrustedExecutionCluster found"));
         });
     }
 
     #[tokio::test]
-    async fn test_get_public_trustee_addr_multiple() {
+    async fn test_get_trustee_info_multiple() {
         let clos = async |_, _| {
             let mut clusters = dummy_clusters();
             clusters.items.push(clusters.items[0].clone());
             Ok(serde_json::to_string(&clusters).unwrap())
         };
         count_check!(1, clos, |client| {
-            let err = get_public_trustee_addr(client).await.err().unwrap();
+            let err = get_trustee_info(client).await.err().unwrap();
             assert!(err.to_string().contains("More than one"));
         });
     }
 
     #[tokio::test]
-    async fn test_get_public_trustee_no_addr() {
+    async fn test_get_trustee_info_no_addr() {
         let clos = async |_, _| {
             let mut clusters = dummy_clusters();
             clusters.items[0].spec.public_trustee_addr = None;
             Ok(serde_json::to_string(&clusters).unwrap())
         };
         count_check!(1, clos, |client| {
-            let err = get_public_trustee_addr(client).await.err().unwrap();
+            let err = get_trustee_info(client).await.err().unwrap();
             let contains = "did not specify a public Trustee address";
             assert!(err.to_string().contains(contains));
         });
     }
 
     #[tokio::test]
-    async fn test_get_public_trustee_error() {
-        test_get_error(async |c| get_public_trustee_addr(c).await.map(|_| ())).await;
+    async fn test_get_trustee_info_error() {
+        test_get_error(async |c| get_trustee_info(c).await.map(|_| ())).await;
     }
 
     fn dummy_machine() -> Machine {
