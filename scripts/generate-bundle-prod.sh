@@ -45,6 +45,10 @@ cp "${PROJECT_ROOT}/config/crd"/*.yaml "${BUNDLE_MANIFESTS}/"
 cp "${PROJECT_ROOT}/config/rbac"/*.yaml "${BUNDLE_MANIFESTS}/"
 rm -f "${BUNDLE_MANIFESTS}/kustomization.yaml"
 rm -f "${BUNDLE_MANIFESTS}/service_account.yaml"
+# Remove OpenShift-specific CRDs - these are only used in tests, not by the operator
+# Including them would prevent installation on non-OpenShift clusters (e.g., kind)
+rm -f "${BUNDLE_MANIFESTS}/config.openshift.io_ingresses.yaml"
+rm -f "${BUNDLE_MANIFESTS}/route.openshift.io_routes.yaml"
 # Remove operator's main RBAC files - these are defined in CSV's clusterPermissions instead
 # This prevents OLM from creating duplicate ClusterRoles and ClusterRoleBindings
 rm -f "${BUNDLE_MANIFESTS}/role.yaml"
