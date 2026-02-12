@@ -9,6 +9,6 @@ kubectl create -f "https://github.com/kubevirt/kubevirt/releases/download/${VERS
 kubectl create -f "https://github.com/kubevirt/kubevirt/releases/download/${VERSION}/kubevirt-cr.yaml"
 
 kubectl patch kubevirt kubevirt -n kubevirt --type='merge' -p \
-'{"spec":{"configuration":{"developerConfiguration":{"featureGates":["ExperimentalIgnitionSupport"]}}}}'
+'{"spec":{"configuration":{"developerConfiguration":{"featureGates":["ExperimentalIgnitionSupport"]},"ksmConfiguration":{"nodeLabelSelector":{}}}}}'
 
 kubectl wait --for=jsonpath='{.status.phase}'=Deployed kubevirt/kubevirt -n kubevirt --timeout=10m
