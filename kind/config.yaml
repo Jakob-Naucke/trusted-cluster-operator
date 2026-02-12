@@ -18,6 +18,10 @@ nodes:
     hostPort: 8000
   - containerPort: 31002
     hostPort: 8001
+  extraMounts:
+    - hostPath: /sys/kernel/mm/ksm
+      containerPath: /sys/kernel/mm/ksm
+      propagation: Bidirectional
 featureGates:
   "ImageVolume": true
 networking:
