@@ -316,19 +316,15 @@ async fn secret_reconcile(
                 );
                 let client = Arc::unwrap_or_clone(client);
                 // Update trustee deployment - secrets with deletion_timestamp will be filtered out
-                match trustee::update_attestation_keys(client).await {
-                    Ok(_) => Ok(Action::await_change()),
-                    Err(e) if e.to_string().contains("not found") => {
-                        info!("Trustee deployment not found during secret cleanup (likely already deleted)");
-                        Ok(Action::await_change())
-                    }
-                    Err(e) => {
+                trustee::update_attestation_keys(client)
+                    .await
+                    .map(|_| Action::await_change())
+                    .map_err(|e| {
                         eprintln!(
                             "Error updating attestation key volumes during secret deletion: {e}"
                         );
-                        Err(finalizer::Error::<ControllerError>::CleanupFailed(e.into()))
-                    }
-                }
+                        finalizer::Error::<ControllerError>::CleanupFailed(e.into())
+                    })
             }
         }
     })

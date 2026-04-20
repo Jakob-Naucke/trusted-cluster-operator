@@ -12,17 +12,17 @@ use env_logger::Env;
 use ignition_config::v3_5::{
     Clevis, ClevisCustom, Config as IgnitionConfig, Filesystem, Luks, Storage,
 };
-use k8s_openapi::apimachinery::pkg::apis::meta::v1::{ObjectMeta, OwnerReference};
+use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
 use kube::{Api, Client};
 use log::{error, info};
 use std::convert::Infallible;
 use uuid::Uuid;
 use warp::{http::StatusCode, reply, Filter};
 
-use trusted_cluster_operator_lib::endpoints::*;
-use trusted_cluster_operator_lib::{
-    generate_owner_reference, get_trusted_execution_cluster, Machine, MachineSpec,
+use trusted_cluster_operator_lib::endpoints::{
+    ATTESTATION_KEY_REGISTER_RESOURCE, REGISTER_SERVER_RESOURCE,
 };
+use trusted_cluster_operator_lib::{get_trusted_execution_cluster, Machine, MachineSpec};
 
 #[derive(Parser)]
 #[command(name = "register-server")]
@@ -132,19 +132,7 @@ async fn register_handler() -> Result<impl warp::Reply, Infallible> {
         Ok(c) => c,
         Err(e) => return internal_error(e.into()),
     };
-
-    // Get the TrustedExecutionCluster to use as owner reference for the Machine
-    let cluster = match get_trusted_execution_cluster(kube_client.clone()).await {
-        Ok(c) => c,
-        Err(e) => return internal_error(e.context("Failed to get TrustedExecutionCluster")),
-    };
-
-    let owner_reference = match generate_owner_reference(&cluster) {
-        Ok(o) => o,
-        Err(e) => return internal_error(e.context("Failed to generate owner reference")),
-    };
-
-    match create_machine(kube_client.clone(), &id, owner_reference).await {
+    match create_machine(kube_client.clone(), &id).await {
         Ok(_) => info!("Machine created successfully: machine-{id}"),
         Err(e) => return internal_error(e.context("Failed to create machine")),
     }
@@ -173,16 +161,11 @@ async fn register_handler() -> Result<impl warp::Reply, Infallible> {
     ))
 }
 
-async fn create_machine(
-    client: Client,
-    uuid: &str,
-    owner_reference: OwnerReference,
-) -> anyhow::Result<()> {
+async fn create_machine(client: Client, uuid: &str) -> anyhow::Result<()> {
     let machine_name = format!("machine-{uuid}");
     let machine = Machine {
         metadata: ObjectMeta {
             name: Some(machine_name.clone()),
-            owner_references: Some(vec![owner_reference]),
             ..Default::default()
         },
         spec: MachineSpec {
@@ -296,34 +279,16 @@ mod tests {
         }
     }
 
-    fn dummy_owner_reference() -> OwnerReference {
-        OwnerReference {
-            api_version: "trusted-execution-clusters.io/v1alpha1".to_string(),
-            kind: "TrustedExecutionCluster".to_string(),
-            name: "test-cluster".to_string(),
-            uid: "test-uid".to_string(),
-            controller: Some(true),
-            block_owner_deletion: Some(true),
-        }
-    }
-
     #[tokio::test]
     async fn test_create_machine() {
         let clos = async |_, _| Ok(serde_json::to_string(&dummy_machine()).unwrap());
         count_check!(1, clos, |client| {
-            assert!(create_machine(client, "test", dummy_owner_reference())
-                .await
-                .is_ok());
+            assert!(create_machine(client, "test").await.is_ok());
         });
     }
 
     #[tokio::test]
     async fn test_create_machine_error() {
-        test_create_error(async |c| {
-            create_machine(c, "test", dummy_owner_reference())
-                .await
-                .map(|_| ())
-        })
-        .await;
+        test_create_error(async |c| create_machine(c, "test").await.map(|_| ())).await;
     }
 }
