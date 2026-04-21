@@ -5,15 +5,18 @@
 
 use anyhow::{Result, anyhow};
 use fs_extra::dir;
+use k8s_openapi::NamespaceResourceScope;
 use k8s_openapi::api::apps::v1::Deployment;
 use k8s_openapi::api::core::v1::{ConfigMap, Namespace};
 use kube::api::DeleteParams;
-use kube::{Api, Client};
+use kube::{Api, Client, Resource};
+use serde::de::DeserializeOwned;
+use std::fmt::Debug;
 use std::path::{Path, PathBuf};
 use std::{collections::BTreeMap, env, sync::Once, time::Duration};
 use tokio::process::Command;
 
-use trusted_cluster_operator_lib::TrustedExecutionCluster;
+use trusted_cluster_operator_lib::{ApprovedImage, Machine, TrustedExecutionCluster};
 use trusted_cluster_operator_lib::endpoints::*;
 use trusted_cluster_operator_lib::openshift_ingresses::Ingress;
 use trusted_cluster_operator_lib::routes::Route;
@@ -299,7 +302,9 @@ impl TestContext {
     }
 
     pub async fn cleanup(&self) -> Result<()> {
-        self.delete_trusted_execution_cluster().await?;
+        self.delete_all::<TrustedExecutionCluster>().await?;
+        self.delete_all::<Machine>().await?;
+        self.delete_all::<ApprovedImage>().await?;
         self.cleanup_namespace().await?;
         self.cleanup_manifests_dir()?;
         Ok(())
@@ -327,29 +332,22 @@ impl TestContext {
         Ok(())
     }
 
-    async fn delete_trusted_execution_cluster(&self) -> Result<()> {
-        let tec_api: Api<TrustedExecutionCluster> =
-            Api::namespaced(self.client.clone(), &self.test_namespace);
-        let dp = DeleteParams::default();
-
-        let tec_list = tec_api.list(&Default::default()).await?;
-
-        for tec in &tec_list.items {
-            if let Some(name) = &tec.metadata.name {
-                test_info!(
-                    &self.test_name,
-                    "Deleting TrustedExecutionCluster: {}",
-                    name
-                );
-                tec_api.delete(name, &dp).await?;
-
-                // Wait for the resource to be deleted
-                wait_for_resource_deleted(&tec_api, name, 120, 5).await?;
-                test_info!(
-                    &self.test_name,
-                    "TrustedExecutionCluster {} has been deleted",
-                    name
-                );
+    async fn delete_all<K>(&self) -> Result<()>
+    where
+        K: Resource<DynamicType = (), Scope = NamespaceResourceScope>
+            + Clone
+            + Debug,
+        K: DeserializeOwned,
+    {
+        let api: Api<K> = Api::namespaced(self.client.clone(), &self.test_namespace);
+        let kind = K::kind(&());
+        let list = api.list(&Default::default()).await?;
+        for obj in &list.items {
+            if let Some(name) = &obj.meta().name {
+                test_info!(&self.test_name, "Deleting {}: {}", kind, name);
+                api.delete(name, &Default::default()).await?;
+                wait_for_resource_deleted(&api, name, 120, 5).await?;
+                test_info!(&self.test_name, "{} {} has been deleted", kind, name);
             }
         }
 
@@ -769,7 +767,7 @@ where
             let name = resource_name.to_string();
             async move {
                 match api.get(&name).await {
-                    Ok(_) => Err("{name} still exists, retrying..."),
+                    Ok(_) => Err(format!("{name} still exists, retrying...")),
                     Err(kube::Error::Api(ae)) if ae.code == 404 => Ok(()),
                     Err(e) => {
                         panic!("Unexpected error while fetching {name}: {e:?}");
