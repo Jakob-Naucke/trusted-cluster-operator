@@ -54,6 +54,26 @@ impl AzureBackend {
         }
         Ok(())
     }
+
+    async fn serial_console_log(&self) -> Option<String> {
+        let output = Command::new("az")
+            .args([
+                "vm",
+                "boot-diagnostics",
+                "get-boot-log",
+                "--resource-group",
+                &self.resource_group,
+                "--name",
+                &self.config.vm_name,
+            ])
+            .output()
+            .await
+            .ok()?;
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let combined = format!("{stdout}{stderr}");
+        (!combined.trim().is_empty()).then_some(combined)
+    }
 }
 
 #[async_trait::async_trait]
@@ -114,12 +134,18 @@ impl VmBackend for AzureBackend {
         args.extend(["--security-type", "ConfidentialVM"]);
         args.extend(["--enable-secure-boot", "true", "--enable-vtpm", "true"]);
         args.extend(["--os-disk-security-encryption-type", "VMGuestStateOnly"]);
+        args.extend(["--boot-diagnostics-storage", "jnaucke"]);
 
-        let err = format!(
-            "Request to create the VM {vm} has failed, but it may still have been created. \
-             Log in manually to verify the VM does not keep running."
-        );
-        self.az_rg(args).await.context(warn_frame(&err))?;
+        if let Err(e) = self.az_rg(args).await {
+            let mut err = format!(
+                "Request to create the VM {vm} has failed, but it may still have been created. \
+                 Log in manually to verify the VM does not keep running."
+            );
+            if let Some(log) = self.serial_console_log().await {
+                err.push_str(&format!("\n\nSerial console log:\n{log}"));
+            }
+            return Err(e.context(warn_frame(&err)));
+        }
 
         // Schedule auto-shutdown to control costs if cleanup fails
         let shutdown_time = chrono::Utc::now() + chrono::Duration::minutes(KEEP_ALIVE_MINUTES);
@@ -176,6 +202,9 @@ impl VmBackend for AzureBackend {
     }
 
     async fn get_root_key(&self) -> Result<Option<Vec<u8>>> {
+        if let Some(log) = self.serial_console_log().await {
+            println!("Serial console log:\n{log}");
+        }
         Ok(None)
     }
 
