@@ -5429,6 +5429,7 @@ version = "0.2.2"
 dependencies = [
  "anyhow",
  "cfg-if",
+ "chrono",
  "compute-pcrs-lib",
  "hex",
  "k8s-openapi 0.28.0",
