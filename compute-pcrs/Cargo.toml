@@ -19,3 +19,5 @@ k8s-openapi.workspace = true
 kube.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
+# Pins the reference-values repo+commit in Cargo.lock for the container build (see Containerfile).
+reference-values.workspace = true
