@@ -5,9 +5,10 @@
 
 ARG build_type
 # Dependency build stage
-FROM ghcr.io/trusted-execution-clusters/buildroot:fedora AS builder
+FROM ghcr.io/trusted-execution-clusters/buildroot:fedora
 ARG build_type
 WORKDIR /build
+RUN dnf -y update && dnf install --enablerepo='*debug*' -y install libstdc++-debuginfo openssl-libs-debuginfo libgcc-debuginfo glibc-debuginfo zlib-ng-compat-debuginfo systemd-libs-debuginfo libcap-debuginfo rust-gdb
 
 COPY Makefile Cargo.toml Cargo.lock go.mod go.sum .
 COPY api api
@@ -26,9 +27,5 @@ RUN if [ "$build_type" = debug ]; then cargo build -p operator; fi
 
 # Target build stage
 COPY operator/src operator/src
-RUN cargo build -p operator $(if [ "$build_type" = release ]; then echo --release; fi)
-
-# Distribution stage
-FROM quay.io/fedora/fedora:43
-ARG build_type
-COPY --from=builder "/build/target/$build_type/operator" /usr/bin
+RUN cargo build -p operator $(if [ "$build_type" = release ]; then echo --release; fi) && \
+    cp "/build/target/$build_type/operator" /usr/bin
