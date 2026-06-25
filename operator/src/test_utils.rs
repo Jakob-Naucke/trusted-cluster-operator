@@ -2,17 +2,18 @@
 //
 // SPDX-License-Identifier: MIT
 
+use crate::trustee;
 use compute_pcrs_lib::Pcr;
 use compute_pcrs_lib::tpmevents::{TPMEvent, TPMEventID};
+use k8s_openapi::apimachinery::pkg::apis::meta::v1::OwnerReference;
 use k8s_openapi::{
     api::core::v1::{ConfigMap, Secret},
     jiff::Timestamp,
 };
-
+use kube::api::ObjectMeta;
 use std::collections::BTreeMap;
-
-use crate::trustee;
 use trusted_cluster_operator_lib::reference_values::{ImagePcr, ImagePcrs, PCR_CONFIG_FILE};
+use trusted_cluster_operator_lib::{Machine, MachineSpec};
 
 pub const DUMMY_PCR_4_VALUE: &str =
     "3f263b96ccbc33bb53d808771f9ab1e02d4dec8854f9530f749cde853a723273";
@@ -94,6 +95,37 @@ pub fn dummy_pcrs_map() -> ConfigMap {
     )]);
     ConfigMap {
         data: Some(data),
+        ..Default::default()
+    }
+}
+
+pub fn dummy_machine(id: &str) -> Machine {
+    Machine {
+        metadata: ObjectMeta {
+            name: Some(id.to_string()),
+            ..Default::default()
+        },
+        spec: MachineSpec { id: id.to_string() },
+        status: None,
+    }
+}
+
+pub fn dummy_ak_secret(name: &str) -> Secret {
+    Secret {
+        metadata: ObjectMeta {
+            name: Some(name.to_string()),
+            owner_references: Some(vec![OwnerReference {
+                kind: "AttestationKey".to_string(),
+                name: name.to_string(),
+                uid: "ak-uid".to_string(),
+                ..Default::default()
+            }]),
+            ..Default::default()
+        },
+        data: Some(BTreeMap::from([(
+            "public_key".to_string(),
+            k8s_openapi::ByteString(b"test-ak-public-key".to_vec()),
+        )])),
         ..Default::default()
     }
 }

@@ -6,8 +6,8 @@
 use anyhow::Context;
 
 use chrono::Utc;
-use compute_pcrs_lib::tpmevents::{TPMEvent, TPMEventID};
 use compute_pcrs_lib::Pcr;
+use compute_pcrs_lib::tpmevents::{TPMEvent, TPMEventID};
 use k8s_openapi::api::apps::v1::Deployment;
 use k8s_openapi::api::core::v1::{ConfigMap, Pod, Secret};
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
