@@ -59,6 +59,10 @@ macro_rules! create_or_info_if_exists {
 }
 
 pub const TLS_DIR: &str = "/etc/tls";
+/// As per kube-rs docs, it's possible to miss events and requeue_after = None should only be used
+/// when it is known another requeue is imminent. Use this requeue duration for cases where no
+/// further action is usually needed, but eventual consistency is desired.
+pub const LONG_REQUEUE: Action = Action::requeue(Duration::from_hours(1));
 
 /// Reads a TLS certificate secret and returns the Volume and VolumeMount for it.
 /// Returns None if the secret name is not provided or the secret does not exist.

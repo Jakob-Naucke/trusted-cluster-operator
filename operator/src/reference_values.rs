@@ -32,7 +32,7 @@ use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use crate::COMPONENT_VERSION;
 use crate::trustee::{self, get_image_pcrs};
-use operator::{ControllerError, upsert_condition};
+use operator::{ControllerError, LONG_REQUEUE, upsert_condition};
 use operator::{controller_error_policy, controller_info, create_or_info_if_exists};
 use trusted_cluster_operator_lib::{conditions::*, reference_values::*, *};
 
@@ -295,7 +295,7 @@ async fn image_add_reconcile(
         return Ok(Action::requeue(Duration::from_secs(5)));
     }
     let (action, reason) = match handle_new_image(client.clone(), image).await {
-        Ok(reason) => (Action::await_change(), reason),
+        Ok(reason) => (LONG_REQUEUE, reason),
         Err(e) => {
             warn!("PCR computation for {name} failed: {e}");
             let action = Action::requeue(Duration::from_secs(60));
@@ -324,7 +324,7 @@ async fn image_remove_reconcile(
     let name = image.metadata.name.as_ref().unwrap_or(&default);
     if cluster.is_none() {
         info!("No TrustedExecutionCluster found, skipping disallow_image for {name}");
-        return Ok(Action::await_change());
+        return Ok(LONG_REQUEUE);
     }
     let cluster = cluster.unwrap();
     let tec_name = cluster.metadata.name.unwrap_or("<no name>".to_string());
@@ -333,10 +333,10 @@ async fn image_remove_reconcile(
             "TrustedExecutionCluster {tec_name} is being deleted, \
              skipping disallow_image for {name}"
         );
-        return Ok(Action::await_change());
+        return Ok(LONG_REQUEUE);
     }
     disallow_image(client, name).await?;
-    Ok(Action::await_change())
+    Ok(LONG_REQUEUE)
 }
 
 pub async fn launch_rv_image_controller(client: Client) {
