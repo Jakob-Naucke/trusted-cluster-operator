@@ -13,9 +13,9 @@ use compute_pcrs_lib::tpmevents::combine::combine_images;
 use futures_util::StreamExt;
 use k8s_openapi::api::apps::v1::{Deployment, DeploymentSpec};
 use k8s_openapi::api::core::v1::{
-    ConfigMap, ConfigMapVolumeSource, Container, ContainerPort, EnvVar, KeyToPath, PodSpec,
-    PodTemplateSpec, Secret, SecretVolumeSource, Service, ServicePort, ServiceSpec, Volume,
-    VolumeMount,
+    ConfigMap, ConfigMapVolumeSource, Container, ContainerPort, EmptyDirVolumeSource, EnvVar,
+    KeyToPath, PodSpec, PodTemplateSpec, Secret, SecretVolumeSource, Service, ServicePort,
+    ServiceSpec, Volume, VolumeMount,
 };
 use k8s_openapi::apimachinery::pkg::{
     apis::meta::v1::{LabelSelector, OwnerReference},
@@ -53,6 +53,8 @@ pub(crate) const TRUSTEE_RV_MAP: &str = "trustee-rv-data";
 pub(crate) const REFERENCE_VALUES_FILE: &str = "reference-values.json";
 const TRUSTEE_AUTH_SECRET: &str = "trustee-auth";
 const TRUSTEE_AUTH_KEY_DIR: &str = "/opt/trustee/keys";
+const TRUSTEE_STORAGE_VOLUME: &str = "trustee-storage";
+const TRUSTEE_STORAGE_DIR: &str = "/opt/trustee/storage";
 pub(crate) const TRUSTEE_AUTH_PUB_KEY: &str = "public.pub";
 pub(crate) const TRUSTEE_AUTH_PRIV_KEY: &str = "private.key";
 
@@ -581,7 +583,7 @@ pub async fn generate_kbs_service(
     Ok(())
 }
 
-fn generate_kbs_volume_templates() -> [(&'static str, &'static str, Volume); 2] {
+fn generate_kbs_volume_templates() -> [(&'static str, &'static str, Volume); 3] {
     [
         (
             TRUSTEE_DATA_MAP,
@@ -607,6 +609,14 @@ fn generate_kbs_volume_templates() -> [(&'static str, &'static str, Volume); 2] 
                     }]),
                     ..Default::default()
                 }),
+                ..Default::default()
+            },
+        ),
+        (
+            TRUSTEE_STORAGE_VOLUME,
+            TRUSTEE_STORAGE_DIR,
+            Volume {
+                empty_dir: Some(EmptyDirVolumeSource::default()),
                 ..Default::default()
             },
         ),
