@@ -172,16 +172,19 @@ async fn install_trustee_configuration(
         .context("Failed to create the KBS configuration configmap")?;
     info!("Generated configmap for the KBS configuration");
 
+    trustee::generate_trustee_auth_keys_secret(client.clone(), owner_reference.clone())
+        .await
+        .context("Failed to create the auth keys")?;
+    info!("Generate auth keys for the KBS API");
+    trustee::generate_rv_data(client.clone(), owner_reference.clone())
+        .await
+        .context("Failed to create the reference values configmap")?;
+    info!("Created configmap for reference values");
+
     trustee::generate_attestation_policy(client.clone(), owner_reference.clone())
         .await
         .context("Failed to create the attestation policy configmap")?;
     info!("Generated configmap for the attestation policy");
-
-    match trustee::generate_trustee_auth_keys_secret(client.clone(), owner_reference.clone()).await
-    {
-        Ok(_) => info!("Generate auth keys for the KBS API",),
-        Err(e) => error!("Failed to create the auth keys: {e}"),
-    }
 
     let kbs_port = cluster.spec.trustee_kbs_port;
     trustee::generate_kbs_service(client.clone(), owner_reference.clone(), kbs_port)
@@ -292,6 +295,7 @@ async fn main() -> Result<()> {
     reference_values::create_pcrs_config_map(kube_client.clone()).await?;
     reference_values::launch_rv_image_controller(kube_client.clone()).await;
     reference_values::launch_rv_job_controller(kube_client.clone()).await;
+    trustee::launch_trustee_sync_controller(kube_client.clone()).await;
 
     Controller::new(cl, watcher::Config::default())
         .run(reconcile, controller_error_policy, ctx)
@@ -305,7 +309,7 @@ async fn main() -> Result<()> {
 mod tests {
     use http::{Method, Request, StatusCode};
     use k8s_openapi::api::apps::v1::Deployment;
-    use k8s_openapi::api::core::v1::{ConfigMap, Service};
+    use k8s_openapi::api::core::v1::{ConfigMap, Secret, Service};
     use k8s_openapi::{apimachinery::pkg::apis::meta::v1::Time, jiff::Timestamp};
     use kube::api::ObjectList;
     use kube::client::Body;
@@ -447,31 +451,33 @@ mod tests {
         };
 
         let clos = async |req: Request<Body>, ctr| {
-            if ctr < 8 && req.method() == Method::POST {
+            if ctr < 10 && req.method() == Method::POST {
                 use serde_json::to_string;
                 let resp = match ctr {
-                    // Trustee
-                    0 => to_string(&ConfigMap::default()),
-                    1 => to_string(&ConfigMap::default()),
-                    2 => to_string(&Service::default()),
-                    3 => to_string(&Deployment::default()),
-                    // Registration server
-                    4 => to_string(&Deployment::default()),
-                    5 => to_string(&Service::default()),
-                    // Attestation key register server
+                    // install_trustee_configuration
+                    0 => to_string(&ConfigMap::default()), // trustee-data
+                    1 => to_string(&Secret::default()),    // trustee-auth
+                    2 => to_string(&ConfigMap::default()), // trustee-rv-data
+                    3 => to_string(&ConfigMap::default()), // attestation-policy
+                    4 => to_string(&Service::default()),   // kbs-service
+                    5 => to_string(&Deployment::default()), // trustee-deployment
+                    // install_register_server
                     6 => to_string(&Deployment::default()),
                     7 => to_string(&Service::default()),
+                    // install_attestation_key_register
+                    8 => to_string(&Deployment::default()),
+                    9 => to_string(&Service::default()),
                     _ => unreachable!("unexpected counter {ctr}"),
                 };
                 Ok(resp.unwrap())
-            } else if ctr == 8 && req.method() == Method::GET {
+            } else if ctr == 10 && req.method() == Method::GET {
                 let object_list = ObjectList::<ApprovedImage> {
                     items: Vec::new(),
                     types: Default::default(),
                     metadata: Default::default(),
                 };
                 Ok(serde_json::to_string(&object_list).unwrap())
-            } else if ctr == 9 && req.method() == Method::PATCH {
+            } else if ctr == 11 && req.method() == Method::PATCH {
                 let body = req.into_body().collect_bytes().await.unwrap().to_vec();
                 let body = String::from_utf8_lossy(&body);
                 assert!(body.contains("ForeignCondition"),);
@@ -502,7 +508,7 @@ mod tests {
         cluster.status = Some(TrustedExecutionClusterStatus {
             conditions: Some(vec![pre_existing_installed, foreign_condition]),
         });
-        count_check!(10, clos, |client| {
+        count_check!(12, clos, |client| {
             let result = reconcile(Arc::new(cluster), Arc::new(dummy_cluster_ctx(client))).await;
             assert_eq!(result.unwrap(), LONG_REQUEUE);
         });

@@ -11,6 +11,7 @@ use chrono::{DateTime, Utc};
 use clevis_pin_trustee_lib::Key as ClevisKey;
 use compute_pcrs_lib::tpmevents::TPMEvent;
 use compute_pcrs_lib::tpmevents::combine::combine_images;
+use futures_util::StreamExt;
 use k8s_openapi::api::apps::v1::{Deployment, DeploymentSpec};
 use k8s_openapi::api::core::v1::{
     ConfigMap, ConfigMapVolumeSource, Container, ContainerPort, EmptyDirVolumeSource, EnvVar,
@@ -24,13 +25,22 @@ use k8s_openapi::apimachinery::pkg::{
 use kube::{
     Api, Client, Resource,
     api::{ObjectMeta, Patch, PatchParams},
-    runtime::reflector::ObjectRef,
+    runtime::{
+        controller::{Action, Controller},
+        reflector::ObjectRef,
+        watcher,
+    },
 };
-use log::info;
-use operator::{TLS_DIR, create_or_info_if_exists, read_certificate};
-use serde::{Serialize, Serializer};
+use log::{info, warn};
+use operator::{
+    ControllerError, TLS_DIR, controller_error_policy, controller_info, create_or_info_if_exists,
+    read_certificate,
+};
+use serde::{Deserialize, Serialize, Serializer};
 use serde_json::{Value::String as JsonString, json};
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
+use std::time::Duration;
 
 use trusted_cluster_operator_lib::endpoints::*;
 use trusted_cluster_operator_lib::reference_values::*;
@@ -38,9 +48,10 @@ use trusted_cluster_operator_lib::reference_values::*;
 const TRUSTEE_DATA_DIR: &str = "/opt/trustee";
 pub const TRUSTEE_SECRETS_PATH: &str = "/opt/trustee/kbs-repository/default";
 const KBS_CONFIG_FILE: &str = "kbs-config.toml";
-pub(crate) const REFERENCE_VALUES_FILE: &str = "reference-values.json";
 
 pub(crate) const TRUSTEE_DATA_MAP: &str = "trustee-data";
+pub(crate) const TRUSTEE_RV_MAP: &str = "trustee-rv-data";
+pub(crate) const REFERENCE_VALUES_FILE: &str = "reference-values.json";
 const ATT_POLICY_MAP: &str = "attestation-policy";
 const TRUSTED_AK_KEYS_VOLUME: &str = "trusted-ak-keys";
 const TRUSTED_AK_KEYS_DIR: &str = "/etc/tpm/trusted_ak_keys";
@@ -60,7 +71,7 @@ where
 /// reference_value_provider_service::reference_value::ReferenceValue
 /// (cannot import directly because its expiration doesn't serialize
 /// right)
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 struct ReferenceValue {
     pub version: String,
     pub name: String,
@@ -105,22 +116,141 @@ fn recompute_reference_values(image_pcrs: ImagePcrs) -> Vec<ReferenceValue> {
 }
 
 pub async fn update_reference_values(client: Client) -> Result<()> {
-    let config_maps: Api<ConfigMap> = Api::default_namespaced(client);
+    let config_maps: Api<ConfigMap> = Api::default_namespaced(client.clone());
 
     let image_pcrs_map = config_maps.get(PCR_CONFIG_MAP).await?;
     let reference_values = recompute_reference_values(get_image_pcrs(image_pcrs_map)?);
     let rv_json = serde_json::to_string(&reference_values)?;
 
-    let mut trustee_map = config_maps.get(TRUSTEE_DATA_MAP).await?;
-    let err = format!("ConfigMap {TRUSTEE_DATA_MAP} existed, but had no data");
-    let trustee_data = trustee_map.data.as_mut().context(err)?;
-    trustee_data.insert(REFERENCE_VALUES_FILE.to_string(), rv_json);
-
+    let mut rv_map = config_maps.get(TRUSTEE_RV_MAP).await?;
+    let err = format!("ConfigMap {TRUSTEE_RV_MAP} existed, but had no data");
+    let rv_data = rv_map.data.as_mut().context(err)?;
+    rv_data.insert(REFERENCE_VALUES_FILE.to_string(), rv_json);
     config_maps
-        .replace(TRUSTEE_DATA_MAP, &Default::default(), &trustee_map)
+        .replace(TRUSTEE_RV_MAP, &Default::default(), &rv_map)
         .await?;
+
+    if let Err(e) = sync_reference_values(&client, &reference_values).await {
+        warn!(
+            "Failed to sync reference values to KBS (will retry on next deployment reconcile): {e}"
+        );
+    }
     info!("Recomputed reference values");
     Ok(())
+}
+
+async fn get_auth_key_pem(client: &Client) -> Result<String> {
+    let secret_api: Api<Secret> = Api::default_namespaced(client.clone());
+    let auth_secret = secret_api.get(TRUSTEE_AUTH_SECRET).await?;
+    let auth_data = auth_secret.data.context("Auth secret has no data")?;
+    let auth_key_bytes = auth_data
+        .get(TRUSTEE_AUTH_PRIV_KEY)
+        .context("Auth secret missing private key")?;
+    String::from_utf8(auth_key_bytes.0.clone()).context("Auth key is not valid UTF-8")
+}
+
+async fn get_kbs_connection(client: &Client) -> Result<(String, Vec<String>)> {
+    let tec = trusted_cluster_operator_lib::get_trusted_execution_cluster(client.clone()).await?;
+    let secret_api: Api<Secret> = Api::default_namespaced(client.clone());
+
+    if let Some(secret_name) = &tec.spec.trustee_secret
+        && let Ok(secret) = secret_api.get(secret_name).await
+        && let Some(ca_crt) = secret.data.as_ref().and_then(|d| d.get("ca.crt"))
+    {
+        let ca_pem =
+            String::from_utf8(ca_crt.0.clone()).context("ca certificate is not valid UTF-8")?;
+        let trustee_addr = format!(
+            "https://{}",
+            tec.spec
+                .public_trustee_addr
+                .as_ref()
+                .context("TrustedExecutionCluster missing public_trustee_addr HTTPS")?
+        );
+        return Ok((trustee_addr, vec![ca_pem]));
+    }
+
+    Ok((
+        format!(
+            "http://{}",
+            tec.spec
+                .public_trustee_addr
+                .as_ref()
+                .context("TrustedExecutionCluster missing public_trustee_addr HTTP")?
+        ),
+        vec![],
+    ))
+}
+
+async fn sync_reference_values(client: &Client, reference_values: &[ReferenceValue]) -> Result<()> {
+    let auth_key = get_auth_key_pem(client).await?;
+    let (url, certs) = get_kbs_connection(client).await?;
+    for rv in reference_values {
+        kbs_client::set_sample_rv(
+            url.clone(),
+            rv.name.clone(),
+            rv.value.clone(),
+            auth_key.clone(),
+            certs.clone(),
+        )
+        .await?;
+    }
+    info!("Sent {} reference values to KBS", reference_values.len());
+    Ok(())
+}
+
+async fn sync_reference_values_from_configmap(client: &Client) -> Result<()> {
+    let config_maps: Api<ConfigMap> = Api::default_namespaced(client.clone());
+    let rv_map = config_maps.get(TRUSTEE_RV_MAP).await?;
+    let data = rv_map.data.context("RV ConfigMap has no data")?;
+    let rv_json = match data.get(REFERENCE_VALUES_FILE) {
+        Some(json) => json,
+        None => {
+            info!("No reference values in ConfigMap yet, skipping sync");
+            return Ok(());
+        }
+    };
+    let reference_values: Vec<ReferenceValue> = serde_json::from_str(rv_json)?;
+    if reference_values.is_empty() {
+        return Ok(());
+    }
+    sync_reference_values(client, &reference_values).await
+}
+
+async fn trustee_deployment_reconcile(
+    deployment: Arc<Deployment>,
+    client: Arc<Client>,
+) -> Result<Action, ControllerError> {
+    if let Some(status) = &deployment.status
+        && let Some(is_available) = &status.conditions
+        && is_available
+            .iter()
+            .any(|c| c.type_ == "Available" && c.status == "True")
+    {
+        let c = Arc::unwrap_or_clone(client.clone());
+        if let Err(e) = sync_reference_values_from_configmap(&c).await {
+            warn!("Failed to sync reference values to KBS: {e}");
+            return Ok(Action::requeue(Duration::from_secs(30)));
+        }
+    }
+
+    Ok(Action::await_change())
+}
+
+pub async fn launch_trustee_sync_controller(client: Client) {
+    let deployments: Api<Deployment> = Api::default_namespaced(client.clone());
+    let watcher_config = watcher::Config {
+        label_selector: Some(format!("app={TRUSTEE_APP_LABEL}")),
+        ..Default::default()
+    };
+    tokio::spawn(
+        Controller::new(deployments, watcher_config)
+            .run(
+                trustee_deployment_reconcile,
+                controller_error_policy,
+                Arc::new(client),
+            )
+            .for_each(controller_info),
+    );
 }
 
 pub struct Ed25519KeyPair {
@@ -469,12 +599,26 @@ pub async fn generate_trustee_data(
     let data = BTreeMap::from([
         ("kbs-config.toml".to_string(), kbs_config),
         ("policy.rego".to_string(), policy_rego.to_string()),
-        (REFERENCE_VALUES_FILE.to_string(), "[]".to_string()),
     ]);
 
     let config_map = ConfigMap {
         metadata: ObjectMeta {
             name: Some(TRUSTEE_DATA_MAP.to_string()),
+            owner_references: Some(vec![owner_reference]),
+            ..Default::default()
+        },
+        data: Some(data),
+        ..Default::default()
+    };
+    create_or_info_if_exists!(client, ConfigMap, config_map);
+    Ok(())
+}
+
+pub async fn generate_rv_data(client: Client, owner_reference: OwnerReference) -> Result<()> {
+    let data = BTreeMap::from([(REFERENCE_VALUES_FILE.to_string(), "[]".to_string())]);
+    let config_map = ConfigMap {
+        metadata: ObjectMeta {
+            name: Some(TRUSTEE_RV_MAP.to_string()),
             owner_references: Some(vec![owner_reference]),
             ..Default::default()
         },
@@ -625,7 +769,10 @@ pub async fn generate_kbs_deployment(
     image: &str,
     secret: &Option<String>,
 ) -> Result<()> {
-    let selector = Some(BTreeMap::from([("app".to_string(), "kbs".to_string())]));
+    let selector = Some(BTreeMap::from([(
+        "app".to_string(),
+        TRUSTEE_APP_LABEL.to_string(),
+    )]));
     let tls_volumes = read_certificate(client.clone(), secret).await?;
     let pod_spec = generate_kbs_pod_spec(image, tls_volumes);
 
@@ -633,6 +780,7 @@ pub async fn generate_kbs_deployment(
     let deployment = Deployment {
         metadata: ObjectMeta {
             name: Some(TRUSTEE_DEPLOYMENT.to_string()),
+            labels: selector.clone(),
             owner_references: Some(vec![owner_reference]),
             ..Default::default()
         },
@@ -740,12 +888,13 @@ mod tests {
                 Ok(serde_json::to_string(&dummy_pcrs_map()).unwrap())
             }
             (1, &Method::GET) | (2, &Method::PUT) => {
-                assert!(req.uri().path().contains(TRUSTEE_DATA_MAP));
+                assert!(req.uri().path().contains(TRUSTEE_RV_MAP));
                 Ok(serde_json::to_string(&dummy_trustee_map()).unwrap())
             }
+            (3, &Method::GET) => Err(StatusCode::NOT_FOUND),
             _ => panic!("unexpected API interaction: {req:?}, counter {ctr}"),
         };
-        count_check!(3, clos, |client| {
+        count_check!(4, clos, |client| {
             assert!(update_reference_values(client).await.is_ok());
         });
     }
@@ -762,12 +911,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_update_rvs_no_trustee_map() {
+    async fn test_update_rvs_no_rvs_map() {
         let clos = async |req: Request<_>, ctr| match (ctr, req.uri().path()) {
             (0, p) if p.contains(PCR_CONFIG_MAP) => {
                 Ok(serde_json::to_string(&dummy_pcrs_map()).unwrap())
             }
-            (1, p) if p.contains(TRUSTEE_DATA_MAP) => Err(StatusCode::NOT_FOUND),
+            (1, p) if p.contains(TRUSTEE_RV_MAP) => Err(StatusCode::NOT_FOUND),
             _ => panic!("unexpected API interaction: {req:?}, counter {ctr}"),
         };
         count_check!(2, clos, |client| {
@@ -776,12 +925,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_update_rvs_no_trustee_data() {
+    async fn test_update_rvs_no_rvs_data() {
         let clos = async |req: Request<_>, ctr| match (ctr, req.uri().path()) {
             (0, p) if p.contains(PCR_CONFIG_MAP) => {
                 Ok(serde_json::to_string(&dummy_pcrs_map()).unwrap())
             }
-            (1, p) if p.contains(TRUSTEE_DATA_MAP) => {
+            (1, p) if p.contains(TRUSTEE_RV_MAP) => {
                 Ok(serde_json::to_string(&ConfigMap::default()).unwrap())
             }
             _ => panic!("unexpected API interaction: {req:?}, counter {ctr}"),

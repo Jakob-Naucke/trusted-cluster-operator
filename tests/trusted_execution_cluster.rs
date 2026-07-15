@@ -21,6 +21,7 @@ use trusted_cluster_operator_lib::{
 };
 use trusted_cluster_operator_test_utils::constants::*;
 use trusted_cluster_operator_test_utils::*;
+const TRUSTEE_RV_MAP: &str = "trustee-rv-data";
 
 fn ak_approved(ak: Option<&AttestationKey>) -> bool {
     let is_approved = |c: &Condition| c.type_ == "Approved" && c.status == "True";
@@ -146,8 +147,8 @@ async fn test_image_disallow() -> anyhow::Result<()> {
         let json = data.and_then(|data| data.get(RV_JSON_KEY));
         json.map(|json| !json.contains(PRIMARY_PCR4_HASH)).unwrap_or(false)
     };
-    let rv_removed = await_condition(configmap_api, TRUSTEE_CONFIG_MAP, chk_removed);
-    let ctx = format!("waiting for ConfigMap {TRUSTEE_CONFIG_MAP} to not contain PCR value");
+    let rv_removed = await_condition(configmap_api, TRUSTEE_RV_MAP, chk_removed);
+    let ctx = format!("waiting for ConfigMap {TRUSTEE_RV_MAP} to not contain PCR value");
     timeout(scaled_duration(180), rv_removed).await.context(ctx)??;
 
     test_ctx.cleanup().await?;
@@ -312,9 +313,9 @@ async fn test_approved_image_readoption() -> anyhow::Result<()> {
 
     test_ctx.info(format!("Deleting TrustedExecutionCluster {TEC_NAME}"));
     clusters.delete(TEC_NAME, &Default::default()).await?;
-    wait_for_resource_deleted(&configmaps, TRUSTEE_CONFIG_MAP, scaled_timeout(60)).await?;
+    wait_for_resource_deleted(&configmaps, TRUSTEE_RV_MAP, scaled_timeout(60)).await?;
     wait_for_resource_deleted(&images, APPROVED_IMAGE_NAME, scaled_timeout(60)).await?;
-    test_ctx.info(format!("Configmap {TRUSTEE_CONFIG_MAP} was removed"));
+    test_ctx.info(format!("Configmap {TRUSTEE_RV_MAP} was removed"));
 
     let image = ApprovedImage {
         spec: image_spec,
@@ -343,8 +344,8 @@ async fn test_approved_image_readoption() -> anyhow::Result<()> {
         let json = data.and_then(|data| data.get(RV_JSON_KEY));
         json.map(|json| json.contains(PRIMARY_PCR4_HASH)).unwrap_or(false)
     };
-    let rv_added = await_condition(configmaps, TRUSTEE_CONFIG_MAP, chk_added);
-    let ctx = format!("waiting for ConfigMap {TRUSTEE_CONFIG_MAP} to contain PCR value");
+    let rv_added = await_condition(configmaps, TRUSTEE_RV_MAP, chk_added);
+    let ctx = format!("waiting for ConfigMap {TRUSTEE_RV_MAP} to contain PCR value");
     timeout(scaled_duration(180), rv_added).await.context(ctx)??;
     test_ctx.info("Reference values regenerated");
 
@@ -387,7 +388,7 @@ async fn test_combined_image_pcrs_configmap_updates() -> anyhow::Result<()> {
         }
         true
     };
-    let done = await_condition(configmaps, "trustee-data", all_expected_pcrs);
+    let done = await_condition(configmaps, TRUSTEE_RV_MAP, all_expected_pcrs);
     let ctx = "waiting for ConfigMap trustee-data to contain all expected pcrs";
     timeout(scaled_duration(180), done).await.context(ctx)??;
 
