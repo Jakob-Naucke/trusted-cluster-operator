@@ -4,7 +4,11 @@
 
 use compute_pcrs_lib::Pcr;
 use compute_pcrs_lib::tpmevents::{TPMEvent, TPMEventID};
-use k8s_openapi::{api::core::v1::ConfigMap, jiff::Timestamp};
+use k8s_openapi::{
+    api::core::v1::{ConfigMap, Secret},
+    jiff::Timestamp,
+};
+
 use std::collections::BTreeMap;
 
 use crate::trustee;
@@ -51,6 +55,26 @@ pub fn dummy_pcrs() -> ImagePcrs {
             reference: "".to_string(),
         },
     )]))
+}
+
+pub fn dummy_trustee_auth() -> Secret {
+    let key_pair =
+        trustee::generate_ed25519_key_pair().expect("Failed to generate ed25519 key pair");
+    let data = BTreeMap::from([
+        (
+            trustee::TRUSTEE_AUTH_PRIV_KEY.to_string(),
+            k8s_openapi::ByteString(key_pair.private_key_pem),
+        ),
+        (
+            trustee::TRUSTEE_AUTH_PUB_KEY.to_string(),
+            k8s_openapi::ByteString(key_pair.public_key_pem),
+        ),
+    ]);
+
+    Secret {
+        data: Some(data),
+        ..Default::default()
+    }
 }
 
 pub fn dummy_trustee_map() -> ConfigMap {

@@ -94,9 +94,6 @@ const ALLOWED_CRYPTO_CRATES: &[&str] = &[
     "superboring",
     "universal-hash",
     "zeroize_derive",
-    // ring is pulled in by kbs-client v0.17.0 (via rustls/webpki).
-    // Not used for network TLS in our code path (we use native-tls/OpenSSL).
-    "ring",
 ];
 
 // Target we actually build and ship for; keeps platform-only crates.

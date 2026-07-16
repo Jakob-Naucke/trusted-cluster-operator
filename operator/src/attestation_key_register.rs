@@ -211,7 +211,7 @@ async fn machine_reconcile(
     // Check if the machine is being deleted
     if machine.metadata.deletion_timestamp.is_some() {
         info!(
-            "Machine {} is being deleted, skipping update of attestation key volumes",
+            "Machine {} is being deleted, updating attestation key",
             machine.metadata.name.clone().unwrap_or_default()
         );
         return Ok(LONG_REQUEUE);
@@ -328,12 +328,13 @@ async fn secret_reconcile(
     finalizer(&secrets, ATTESTATION_KEY_SECRET_FINALIZER, secret, |ev| async move {
         match ev {
             Event::Apply(_secret) => {
-                // On creation/update, just update the trustee deployment volumes
-                trustee::update_attestation_keys(&ctx)
+                // On creation/update, just update the AK via trustee API
+                trustee::update_attestation_keys(ctx.client.clone())
                     .await
                     .map(|_| LONG_REQUEUE)
                     .map_err(|e| {
                         warn!("Error updating attestation key volumes on secret apply: {e}");
+                        warn!("Error updating attestation key on secret apply: {e}");
                         finalizer::Error::<ControllerError>::ApplyFailed(e.into())
                     })
             }
@@ -343,11 +344,13 @@ async fn secret_reconcile(
                     "AttestationKey secret {secret_name} is being deleted, updating trustee deployment volumes"
                 );
                 // Update trustee deployment - secrets with deletion_timestamp will be filtered out
-                trustee::update_attestation_keys(&ctx)
+                trustee::update_attestation_keys(ctx.client.clone())
                     .await
                     .map(|_| LONG_REQUEUE)
                     .map_err(|e| {
-                        warn!("Error updating attestation key volumes during secret deletion: {e}");
+                        warn!(
+                            "Error updating attestation key during secret deletion: {e}"
+                        );
                         finalizer::Error::<ControllerError>::CleanupFailed(e.into())
                     })
             }
