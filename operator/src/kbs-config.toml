@@ -28,6 +28,3 @@ policy_engine = "opa"
 name = "resource"
 type = "LocalFs"
 dir_path = "/opt/trustee/kbs-repository"
-
-[policy_engine]
-policy_path = "/opt/trustee/policy.rego"

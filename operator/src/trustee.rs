@@ -216,6 +216,17 @@ async fn sync_reference_values_from_configmap(client: &Client) -> Result<()> {
     sync_reference_values(client, &reference_values).await
 }
 
+pub async fn sync_resource_policy(client: Client) -> Result<()> {
+    let auth_key = get_auth_key_pem(&client).await?;
+    let (url, certs) = get_kbs_connection(&client).await?;
+    let policy = include_str!("resource.rego");
+    info!("Sending resource policy to KBS API...");
+    kbs_client::set_resource_policy(&url, auth_key.clone(), policy.as_bytes().to_vec(), certs)
+        .await?;
+    info!("Resource policy set successfully");
+    Ok(())
+}
+
 async fn trustee_deployment_reconcile(
     deployment: Arc<Deployment>,
     client: Arc<Client>,
@@ -227,6 +238,10 @@ async fn trustee_deployment_reconcile(
             .any(|c| c.type_ == "Available" && c.status == "True")
     {
         let c = Arc::unwrap_or_clone(client.clone());
+        if let Err(e) = sync_resource_policy(c.clone()).await {
+            warn!("Failed to sync resource policy to KBS: {e}");
+            return Ok(Action::requeue(Duration::from_secs(30)));
+        }
         if let Err(e) = sync_reference_values_from_configmap(&c).await {
             warn!("Failed to sync reference values to KBS: {e}");
             return Ok(Action::requeue(Duration::from_secs(30)));
@@ -594,12 +609,8 @@ pub async fn generate_trustee_data(
 ) -> Result<()> {
     let has_certificate = read_certificate(client.clone(), secret).await?.is_some();
     let kbs_config = generate_kbs_config(has_certificate)?;
-    let policy_rego = include_str!("resource.rego");
 
-    let data = BTreeMap::from([
-        ("kbs-config.toml".to_string(), kbs_config),
-        ("policy.rego".to_string(), policy_rego.to_string()),
-    ]);
+    let data = BTreeMap::from([("kbs-config.toml".to_string(), kbs_config)]);
 
     let config_map = ConfigMap {
         metadata: ObjectMeta {
