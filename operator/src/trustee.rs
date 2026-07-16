@@ -52,7 +52,6 @@ const KBS_CONFIG_FILE: &str = "kbs-config.toml";
 pub(crate) const TRUSTEE_DATA_MAP: &str = "trustee-data";
 pub(crate) const TRUSTEE_RV_MAP: &str = "trustee-rv-data";
 pub(crate) const REFERENCE_VALUES_FILE: &str = "reference-values.json";
-const ATT_POLICY_MAP: &str = "attestation-policy";
 const TRUSTED_AK_KEYS_VOLUME: &str = "trusted-ak-keys";
 const TRUSTED_AK_KEYS_DIR: &str = "/etc/tpm/trusted_ak_keys";
 const TRUSTEE_AUTH_SECRET: &str = "trustee-auth";
@@ -227,6 +226,24 @@ pub async fn sync_resource_policy(client: Client) -> Result<()> {
     Ok(())
 }
 
+pub async fn sync_attestation_policy(client: Client) -> Result<()> {
+    let auth_key = get_auth_key_pem(&client).await?;
+    let (url, certs) = get_kbs_connection(&client).await?;
+    let policy = include_str!("tpm.rego");
+    info!("Sending attestation policy to KBS API...");
+    kbs_client::set_attestation_policy(
+        &url,
+        auth_key.clone(),
+        policy.as_bytes().to_vec(),
+        Some("rego".to_string()),
+        Some("default_cpu".to_string()),
+        certs,
+    )
+    .await?;
+    info!("Attestation policy set successfully");
+    Ok(())
+}
+
 async fn trustee_deployment_reconcile(
     deployment: Arc<Deployment>,
     client: Arc<Client>,
@@ -240,6 +257,10 @@ async fn trustee_deployment_reconcile(
         let c = Arc::unwrap_or_clone(client.clone());
         if let Err(e) = sync_resource_policy(c.clone()).await {
             warn!("Failed to sync resource policy to KBS: {e}");
+            return Ok(Action::requeue(Duration::from_secs(30)));
+        }
+        if let Err(e) = sync_attestation_policy(c.clone()).await {
+            warn!("Failed to sync attestation policy to KBS: {e}");
             return Ok(Action::requeue(Duration::from_secs(30)));
         }
         if let Err(e) = sync_reference_values_from_configmap(&c).await {
@@ -557,30 +578,6 @@ pub async fn generate_trustee_auth_keys_secret(
     Ok(())
 }
 
-pub async fn generate_attestation_policy(
-    client: Client,
-    owner_reference: OwnerReference,
-) -> Result<()> {
-    let policy_rego = include_str!("tpm.rego");
-    let data = BTreeMap::from([
-        ("default_cpu.rego".to_string(), policy_rego.to_string()),
-        // Must create GPU policy or Trustee will attempt to write one to the read-only mount
-        ("default_gpu.rego".to_string(), String::new()),
-    ]);
-
-    let config_map = ConfigMap {
-        metadata: ObjectMeta {
-            name: Some(ATT_POLICY_MAP.to_string()),
-            owner_references: Some(vec![owner_reference]),
-            ..Default::default()
-        },
-        data: Some(data),
-        ..Default::default()
-    };
-    create_or_info_if_exists!(client, ConfigMap, config_map);
-    Ok(())
-}
-
 fn generate_kbs_config(has_certificate: bool) -> Result<String> {
     let kbs_config_template = include_str!("kbs-config.toml");
     let mut config: toml::Table = toml::from_str(kbs_config_template)?;
@@ -670,19 +667,8 @@ pub async fn generate_kbs_service(
     Ok(())
 }
 
-fn generate_kbs_volume_templates() -> [(&'static str, &'static str, Volume); 4] {
+fn generate_kbs_volume_templates() -> [(&'static str, &'static str, Volume); 3] {
     [
-        (
-            ATT_POLICY_MAP,
-            "/opt/trustee/policies/opa",
-            Volume {
-                config_map: Some(ConfigMapVolumeSource {
-                    name: ATT_POLICY_MAP.to_string(),
-                    ..Default::default()
-                }),
-                ..Default::default()
-            },
-        ),
         (
             TRUSTEE_DATA_MAP,
             TRUSTEE_DATA_DIR,
@@ -1067,24 +1053,6 @@ mod tests {
         count_check!(2, clos, |client| {
             assert!(unmount_secret(client, "id").await.is_ok());
         });
-    }
-
-    #[tokio::test]
-    async fn test_generate_att_policy_success() {
-        let clos = |client| generate_attestation_policy(client, Default::default());
-        test_create_success::<_, _, ConfigMap>(clos).await;
-    }
-
-    #[tokio::test]
-    async fn test_generate_att_policy_already_exists() {
-        let clos = |client| generate_attestation_policy(client, Default::default());
-        test_create_already_exists(clos).await;
-    }
-
-    #[tokio::test]
-    async fn test_generate_att_policy_error() {
-        let clos = |client| generate_attestation_policy(client, Default::default());
-        test_error_method!(clos, Method::POST);
     }
 
     #[tokio::test]

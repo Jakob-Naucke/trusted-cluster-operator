@@ -180,12 +180,6 @@ async fn install_trustee_configuration(
         .await
         .context("Failed to create the reference values configmap")?;
     info!("Created configmap for reference values");
-
-    trustee::generate_attestation_policy(client.clone(), owner_reference.clone())
-        .await
-        .context("Failed to create the attestation policy configmap")?;
-    info!("Generated configmap for the attestation policy");
-
     let kbs_port = cluster.spec.trustee_kbs_port;
     trustee::generate_kbs_service(client.clone(), owner_reference.clone(), kbs_port)
         .await
@@ -451,33 +445,32 @@ mod tests {
         };
 
         let clos = async |req: Request<Body>, ctr| {
-            if ctr < 10 && req.method() == Method::POST {
+            if ctr < 9 && req.method() == Method::POST {
                 use serde_json::to_string;
                 let resp = match ctr {
                     // install_trustee_configuration
                     0 => to_string(&ConfigMap::default()), // trustee-data
                     1 => to_string(&Secret::default()),    // trustee-auth
                     2 => to_string(&ConfigMap::default()), // trustee-rv-data
-                    3 => to_string(&ConfigMap::default()), // attestation-policy
-                    4 => to_string(&Service::default()),   // kbs-service
-                    5 => to_string(&Deployment::default()), // trustee-deployment
+                    3 => to_string(&Service::default()),   // kbs-service
+                    4 => to_string(&Deployment::default()), // trustee-deployment
                     // install_register_server
-                    6 => to_string(&Deployment::default()),
-                    7 => to_string(&Service::default()),
+                    5 => to_string(&Deployment::default()),
+                    6 => to_string(&Service::default()),
                     // install_attestation_key_register
-                    8 => to_string(&Deployment::default()),
-                    9 => to_string(&Service::default()),
+                    7 => to_string(&Deployment::default()),
+                    8 => to_string(&Service::default()),
                     _ => unreachable!("unexpected counter {ctr}"),
                 };
                 Ok(resp.unwrap())
-            } else if ctr == 10 && req.method() == Method::GET {
+            } else if ctr == 9 && req.method() == Method::GET {
                 let object_list = ObjectList::<ApprovedImage> {
                     items: Vec::new(),
                     types: Default::default(),
                     metadata: Default::default(),
                 };
                 Ok(serde_json::to_string(&object_list).unwrap())
-            } else if ctr == 11 && req.method() == Method::PATCH {
+            } else if ctr == 10 && req.method() == Method::PATCH {
                 let body = req.into_body().collect_bytes().await.unwrap().to_vec();
                 let body = String::from_utf8_lossy(&body);
                 assert!(body.contains("ForeignCondition"),);
@@ -508,7 +501,7 @@ mod tests {
         cluster.status = Some(TrustedExecutionClusterStatus {
             conditions: Some(vec![pre_existing_installed, foreign_condition]),
         });
-        count_check!(12, clos, |client| {
+        count_check!(11, clos, |client| {
             let result = reconcile(Arc::new(cluster), Arc::new(dummy_cluster_ctx(client))).await;
             assert_eq!(result.unwrap(), LONG_REQUEUE);
         });

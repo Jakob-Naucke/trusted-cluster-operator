@@ -11,11 +11,10 @@ attestation_token_type = "CoCo"
 [attestation_service]
 type = "coco_as_builtin"
 work_dir = "/opt/trustee"
-policy_engine = "opa"
 
   [attestation_service.attestation_token_broker]
   type = "Ear"
-  policy_dir = "/opt/trustee/policies"
+  policy_dir = "/etc/trustee/policies" # change to a writable diractory.
 
   [attestation_service.attestation_token_config]
   duration_min = 5
