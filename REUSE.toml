@@ -19,6 +19,7 @@ path = [
   "tests/README.md",
   "examples/*",
   "tools/virtctl/go.sum",
+  "tools/operator-sdk/go.sum",
   "scripts/install-kubevirt.sh"
 ]
 SPDX-FileCopyrightText = [

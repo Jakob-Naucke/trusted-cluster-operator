@@ -19,6 +19,7 @@ updates:
     directories:
       - "/"
       - "/tools/virtctl"
+      - "/tools/operator-sdk"
     schedule:
       interval: "weekly"
     groups:

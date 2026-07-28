@@ -755,7 +755,7 @@ impl TestContext {
         let rbac_temp_dir_str = rbac_temp_dir.to_str().unwrap();
 
         let role_name = "rbac:roleName=trusted-cluster-operator-role";
-        let mut args = vec![&role_name, "crd", "webhook", "paths=./..."];
+        let mut args = vec![&role_name, "crd", "webhook", "paths=./api/..."];
         let crd_artifacts = format!("output:crd:artifacts:config={crd_temp_dir_str}");
         let rbac_artifacts = format!("output:rbac:artifacts:config={rbac_temp_dir_str}");
         args.extend_from_slice(&[&crd_artifacts, &rbac_artifacts]);
