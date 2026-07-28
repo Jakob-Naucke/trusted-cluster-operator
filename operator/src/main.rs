@@ -32,7 +32,7 @@ mod trustee;
 use crate::conditions::*;
 use operator::*;
 
-// Default fallback version tag for Trustee image if RELATED_IMAGE_TRUSTEE is not set.
+/// Default fallback version tag for Trustee image if RELATED_IMAGE_TRUSTEE is not set.
 const TRUSTEE_VERSION: &str = "v0.17.0";
 
 /// Default fallback version tag for operator-managed component images from compile time environment variable (comes from operator crate Cargo.toml)
