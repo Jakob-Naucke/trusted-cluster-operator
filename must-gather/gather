@@ -35,9 +35,3 @@ done
 for pod in $(${KUBECTL} get pods -o jsonpath={..metadata.name} -n kube-system); do
   ${KUBECTL} logs "$pod" -n kube-system &> "${COLLECTION_PATH}/logs/${pod}-kube-system.log"
 done
-
-# Collect kube-apiserver audit log from kind node
-for node in $(${KUBECTL} get nodes -o jsonpath='{.items[*].metadata.name}'); do
-  docker exec "${node}" cat /var/log/kubernetes/audit.log > \
-    "${COLLECTION_PATH}/logs/audit-${node}.log" 2>/dev/null || true
-done
