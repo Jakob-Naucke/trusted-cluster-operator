@@ -16,7 +16,6 @@ nodes:
     kind: ClusterConfiguration
     apiServer:
       extraArgs:
-        audit-policy-file: /etc/kubernetes/policies/audit-policy.yaml
         audit-log-path: /var/log/kubernetes/audit.log
         audit-log-maxsize: "256"
         audit-log-maxbackup: "1"
@@ -42,9 +41,6 @@ nodes:
     - hostPath: /sys/kernel/mm/ksm
       containerPath: /sys/kernel/mm/ksm
       propagation: Bidirectional
-    - hostPath: ./kind/audit-policy.yaml
-      containerPath: /etc/kubernetes/policies/audit-policy.yaml
-      readOnly: true
 featureGates:
   "ImageVolume": true
 networking:
