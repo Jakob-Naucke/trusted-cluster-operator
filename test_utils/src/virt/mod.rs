@@ -8,9 +8,7 @@ pub mod kubevirt;
 
 use anyhow::{Result, anyhow};
 use clevis_pin_trustee_lib::Key as ClevisKey;
-use k8s_openapi::api::core::v1::Secret;
-use kube::{Api, Client};
-use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
+use kube::Client;
 use std::{env, path::PathBuf, time::Duration};
 use tokio::process::Command;
 
@@ -18,7 +16,7 @@ use endpoints::*;
 use trusted_cluster_operator_lib::*;
 
 use super::Poller;
-use crate::{ROOT_SECRET, VirtProvider, get_cluster_url, get_env, get_virt_provider};
+use crate::{VirtProvider, get_cluster_url, get_encoded_root_pem, get_env, get_virt_provider};
 
 #[derive(Clone)]
 pub struct VmConfig {
@@ -28,7 +26,7 @@ pub struct VmConfig {
     pub ssh_public_key: String,
     pub ssh_private_key: PathBuf,
     pub image: String,
-    pub ca_pem: String,
+    pub encoded_ca_pem: String,
 }
 
 impl VmConfig {
@@ -80,7 +78,6 @@ pub async fn generate_ignition(config: &VmConfig) -> Result<serde_json::Value> {
     let ns = &config.namespace;
     let port = Some(REGISTER_SERVER_PORT);
     let register_server_url = get_cluster_url(&client, ns, REGISTER_SERVER_SERVICE, port).await?;
-    let root_pem_encoded = utf8_percent_encode(&config.ca_pem, NON_ALPHANUMERIC);
     let ignition = Ignition {
         version: "3.6.0".to_string(),
         config: Some(IgnitionConfig {
@@ -95,7 +92,7 @@ pub async fn generate_ignition(config: &VmConfig) -> Result<serde_json::Value> {
         security: Some(Security {
             tls: Some(SecurityTls {
                 certificate_authorities: Some(vec![Resource {
-                    source: Some(format!("data:,{root_pem_encoded}")),
+                    source: Some(config.encoded_ca_pem.clone()),
                     ..Default::default()
                 }]),
             }),
@@ -152,12 +149,7 @@ pub async fn create_backend(
     namespace: &str,
     vm_name: &str,
 ) -> Result<Box<dyn VmBackend>> {
-    let secrets: Api<Secret> = Api::namespaced(client.clone(), namespace);
-    let root_secret = secrets.get(ROOT_SECRET).await?;
-    let root_secret_data = root_secret.data.unwrap();
-    let ca_pem_bytes = root_secret_data.get("ca.crt").unwrap();
-    let ca_pem = String::from_utf8(ca_pem_bytes.0.clone())?;
-
+    let encoded_ca_pem = get_encoded_root_pem(client.clone(), namespace).await?;
     let provider = get_virt_provider()?;
     let (public_key, key_path) = generate_ssh_key_pair()?;
     let image = get_env("TEST_IMAGE")?;
@@ -168,7 +160,7 @@ pub async fn create_backend(
         ssh_public_key: public_key,
         ssh_private_key: key_path,
         image,
-        ca_pem,
+        encoded_ca_pem,
     };
     match provider {
         VirtProvider::Kubevirt => Ok(Box::new(kubevirt::KubevirtBackend(config))),

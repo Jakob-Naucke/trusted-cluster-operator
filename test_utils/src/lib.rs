@@ -15,6 +15,7 @@ use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
 use kube::api::{DeleteParams, ObjectMeta, Patch};
 use kube::runtime::wait::await_condition;
 use kube::{Api, Client};
+use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
 use serde_json::json;
 use std::path::{Path, PathBuf};
 use std::{collections::BTreeMap, env, sync::Once, time::Duration};
@@ -450,6 +451,17 @@ pub async fn get_cluster_url(
     get_k8s_platform(client, namespace)
         .get_cluster_url(service, port)
         .await
+}
+
+pub async fn get_encoded_root_pem(client: Client, namespace: &str) -> Result<String> {
+    let secrets: Api<Secret> = Api::namespaced(client.clone(), namespace);
+    let root_secret = secrets.get(ROOT_SECRET).await?;
+    let ctx = format!("Root secret {ROOT_SECRET} had no ca.crt");
+    let root_secret_data = root_secret.data.context(ctx.clone())?;
+    let ca_pem_bytes = root_secret_data.get("ca.crt").context(ctx)?;
+    let root_pem = String::from_utf8(ca_pem_bytes.0.clone())?;
+    let encoded = utf8_percent_encode(&root_pem, NON_ALPHANUMERIC);
+    Ok(format!("data:,{encoded}"))
 }
 
 static INIT: Once = Once::new();
