@@ -160,7 +160,7 @@ fn get_virt_provider() -> Result<VirtProvider> {
     }
 }
 
-fn get_env(name: &str) -> Result<String> {
+pub fn get_env(name: &str) -> Result<String> {
     env::var(name).map_err(|e| anyhow!("Environment variable {name} is required: {e}"))
 }
 
