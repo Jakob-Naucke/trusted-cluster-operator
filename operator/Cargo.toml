@@ -10,7 +10,7 @@ rust-version.workspace = true
 
 [dependencies]
 anyhow.workspace = true
-base64 = "0.22.1"
+base64 = "0.23.0"
 chrono.workspace = true
 clevis-pin-trustee-lib.workspace = true
 trusted-cluster-operator-lib = { path = "../lib" }
@@ -19,7 +19,7 @@ env_logger.workspace = true
 futures-util = "0.3.32"
 hex = "0.4.3"
 json-patch = "4.2.0"
-jsonptr = "0.7.1"
+jsonptr = "0.8.1"
 k8s-openapi.workspace = true
 kube.workspace = true
 log.workspace = true
