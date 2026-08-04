@@ -14,6 +14,20 @@ KUBECTL=kubectl
 INTEGRATION_TEST_THREADS ?= 1
 
 LOCALBIN ?= $(shell pwd)/bin
+# either linux or darwin
+OS ?= $(shell uname -s | tr '[:upper:]' '[:lower:]')
+# either x86_64/amd64 or aarch64/arm64
+ARCH ?= $(shell uname -m | sed 's/x86_64/amd64/' | sed 's/aarch64/arm64/')
+
+# Kopium architecture detection: supports only Linux and macOS.
+# Rust target triples use x86_64/aarch64, but macOS uname -m returns arm64.
+KOPIUM_RUST_ARCH := $(shell uname -m | sed 's/arm64/aarch64/')
+ifeq ($(OS),linux)
+  KOPIUM_TARGET := $(KOPIUM_RUST_ARCH)-unknown-linux-gnu
+else ifeq ($(OS),darwin)
+  KOPIUM_TARGET := $(KOPIUM_RUST_ARCH)-apple-darwin
+endif
+
 CONTROLLER_TOOLS_VERSION ?= $(shell go list -m -f '{{.Version}}' sigs.k8s.io/controller-tools)
 CONTROLLER_GEN ?= $(LOCALBIN)/controller-gen-$(CONTROLLER_TOOLS_VERSION)
 YQ_VERSION ?= $(shell go list -m -f '{{.Version}}' github.com/mikefarah/yq/v4)
@@ -223,13 +237,20 @@ $(LOCALBIN):
 	mkdir -p $(LOCALBIN)
 
 $(CONTROLLER_GEN): $(LOCALBIN)
-	$(call go-install-tool,$(CONTROLLER_GEN),controller-gen,sigs.k8s.io/controller-tools/cmd/controller-gen,$(CONTROLLER_TOOLS_VERSION))
+	curl -fsSL https://github.com/kubernetes-sigs/controller-tools/releases/download/$(CONTROLLER_TOOLS_VERSION)/controller-gen-$(OS)-$(ARCH) -o $(CONTROLLER_GEN) \
+		&& chmod +x $(CONTROLLER_GEN) \
+		|| $(call go-install-tool,$(CONTROLLER_GEN),controller-gen,sigs.k8s.io/controller-tools/cmd/controller-gen,$(CONTROLLER_TOOLS_VERSION))
 
 $(YQ): $(LOCALBIN)
-	$(call go-install-tool,$(YQ),yq,github.com/mikefarah/yq/v4,$(YQ_VERSION))
+	curl -fsSL https://github.com/mikefarah/yq/releases/download/$(YQ_VERSION)/yq_$(OS)_$(ARCH) -o $(YQ) \
+		&& chmod +x $(YQ) \
+		|| $(call go-install-tool,$(YQ),yq,github.com/mikefarah/yq/v4,$(YQ_VERSION))
 
 $(KOPIUM): $(LOCALBIN)
-	$(call cargo-install-tool,$(KOPIUM),kopium,$(KOPIUM_VERSION))
+	{ curl -fsSL https://github.com/kube-rs/kopium/releases/download/$(KOPIUM_VERSION)/kopium-$(KOPIUM_TARGET).tar.xz \
+		| tar -xJ -C $(LOCALBIN) \
+		&& mv $(LOCALBIN)/kopium $(KOPIUM); } \
+		|| $(call cargo-install-tool,$(KOPIUM),kopium,$(KOPIUM_VERSION))
 
 build-tools: $(CONTROLLER_GEN) $(KOPIUM)
 yq: $(YQ)
@@ -237,7 +258,6 @@ yq: $(YQ)
 define go-install-tool
 [ -f "$(1)" ] || { \
 	set -e; \
-	package=$(3)@$(4) ;\
 	GOBIN="$(LOCALBIN)" go install $(3)@$(4) ;\
 	mv "$$(dirname $(1))/$(2)" $(1) ;\
 }
