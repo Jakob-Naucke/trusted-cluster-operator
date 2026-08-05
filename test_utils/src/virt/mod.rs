@@ -6,9 +6,10 @@
 pub mod azure;
 pub mod kubevirt;
 
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow};
 use clevis_pin_trustee_lib::Key as ClevisKey;
-use kube::Client;
+use k8s_openapi::api::core::v1::Secret;
+use kube::{Api, Client};
 use std::{env, path::PathBuf, time::Duration};
 use tokio::process::Command;
 
@@ -170,40 +171,25 @@ pub async fn create_backend(
 
 #[async_trait::async_trait]
 #[auto_impl::auto_impl(Box)]
-pub trait VmBackend: Send + Sync {
-    async fn create_vm(&self) -> Result<()>;
-    async fn wait_for_running(&self, timeout_secs: u64) -> Result<()>;
+pub trait NodeBackend: Send + Sync {
     async fn ssh_exec(&self, command: &str) -> Result<String>;
-    async fn get_root_key(&self) -> Result<Option<Vec<u8>>>;
-    async fn cleanup(&self) -> Result<()>;
 
-    async fn get_boot_id(&self) -> Result<String> {
-        let id = self.ssh_exec("cat /proc/sys/kernel/random/boot_id").await?;
-        Ok(id.trim().to_string())
-    }
+    async fn get_root_key(&self, client: Client, namespace: &str) -> Result<Option<Vec<u8>>> {
+        // Extract the UUID from the Clevis token in the LUKS header
+        let uuid_cmd = "sudo cryptsetup token export --token-id 0 /dev/vda4 | jq -r \".jwe.protected\" | base64 -d | jq -r \".clevis.path\" | cut -d/ -f2";
+        let ctx = "Failed to extract UUID from VM";
+        let uuid_output = self.ssh_exec(uuid_cmd).await.context(ctx)?;
+        let uuid = uuid_output.trim();
 
-    async fn wait_for_vm_ssh_ready(
-        &self,
-        timeout_secs: u64,
-        prev_boot_id: Option<&str>,
-    ) -> Result<()> {
-        let err = format!("SSH access to VM did not become available after {timeout_secs} seconds");
-        let poller = Poller::new()
-            .with_timeout(Duration::from_secs(timeout_secs))
-            .with_interval(Duration::from_secs(10))
-            .with_error_message(err);
+        if uuid.is_empty() {
+            return Err(anyhow!("Retrieved empty UUID from VM"));
+        }
 
-        let check_fn = || async move {
-            let cat = self.ssh_exec("cat /proc/sys/kernel/random/boot_id").await;
-            let boot_id = cat.map_err(|e| anyhow!("SSH not available yet: {e}"))?;
-            if let Some(prev) = prev_boot_id
-                && boot_id.trim() == prev
-            {
-                return Err(anyhow!("VM has not rebooted yet (boot ID unchanged)"));
-            }
-            Ok(())
-        };
-        poller.poll_async(check_fn).await
+        // Use the UUID to get the secret (secrets are named with just the UUID)
+        let secrets: Api<Secret> = Api::namespaced(client, namespace);
+        let ctx = format!("Failed to get secret for UUID {uuid}");
+        let secret = secrets.get(uuid).await.context(ctx)?;
+        Ok(Some(secret.data.unwrap().get("root").unwrap().0.clone()))
     }
 
     async fn verify_encrypted_root(&self, encryption_key: Option<&[u8]>) -> Result<bool> {
@@ -238,5 +224,42 @@ pub trait VmBackend: Send + Sync {
         }
 
         Ok(false)
+    }
+}
+
+#[async_trait::async_trait]
+#[auto_impl::auto_impl(Box)]
+pub trait VmBackend: Send + Sync + NodeBackend {
+    async fn create_vm(&self) -> Result<()>;
+    async fn wait_for_running(&self, timeout_secs: u64) -> Result<()>;
+    async fn cleanup(&self) -> Result<()>;
+
+    async fn get_boot_id(&self) -> Result<String> {
+        let id = self.ssh_exec("cat /proc/sys/kernel/random/boot_id").await?;
+        Ok(id.trim().to_string())
+    }
+
+    async fn wait_for_vm_ssh_ready(
+        &self,
+        timeout_secs: u64,
+        prev_boot_id: Option<&str>,
+    ) -> Result<()> {
+        let err = format!("SSH access to VM did not become available after {timeout_secs} seconds");
+        let poller = Poller::new()
+            .with_timeout(Duration::from_secs(timeout_secs))
+            .with_interval(Duration::from_secs(10))
+            .with_error_message(err);
+
+        let check_fn = || async move {
+            let cat = self.ssh_exec("cat /proc/sys/kernel/random/boot_id").await;
+            let boot_id = cat.map_err(|e| anyhow!("SSH not available yet: {e}"))?;
+            if let Some(prev) = prev_boot_id
+                && boot_id.trim() == prev
+            {
+                return Err(anyhow!("VM has not rebooted yet (boot ID unchanged)"));
+            }
+            Ok(())
+        };
+        poller.poll_async(check_fn).await
     }
 }

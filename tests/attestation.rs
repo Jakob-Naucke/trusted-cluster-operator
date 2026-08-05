@@ -52,7 +52,7 @@ impl SingleAttestationContext {
         backend.wait_for_vm_ssh_ready(scaled_timeout(600), None).await?;
         test_ctx.info("SSH access is ready");
 
-        let root_key = backend.get_root_key().await?;
+        let root_key = backend.get_root_key(client.clone(), namespace).await?;
         if root_key.is_none() {
             test_ctx.warn(ENCRYPTED_ROOT_WARN);
         }
@@ -121,8 +121,8 @@ async fn test_parallel_vm_attestation() -> anyhow::Result<()> {
     test_ctx.info("SSH access ready on both VMs");
 
     // Verify attestation on both VMs in parallel
-    let root_key1 = backend1.get_root_key().await?;
-    let root_key2 = backend2.get_root_key().await?;
+    let root_key1 = backend1.get_root_key(client.clone(), namespace).await?;
+    let root_key2 = backend2.get_root_key(client.clone(), namespace).await?;
     if root_key1.is_none() || root_key2.is_none() {
         test_ctx.warn(ENCRYPTED_ROOT_WARN);
     }

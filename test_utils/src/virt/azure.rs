@@ -3,11 +3,12 @@
 // SPDX-License-Identifier: MIT
 
 use anyhow::{Context, Result, anyhow};
+use kube::Client;
 use serde_json::Value;
 use std::{env, time};
 use tokio::process::Command;
 
-use super::{VmBackend, VmConfig, generate_ignition, ssh_exec};
+use super::{NodeBackend, VmBackend, VmConfig, generate_ignition, ssh_exec};
 use crate::{Poller, ensure_command, warn_frame};
 
 const KEEP_ALIVE_MINUTES: i64 = 60;
@@ -53,6 +54,26 @@ impl AzureBackend {
             return Err(anyhow!("az {} failed: {stderr}", args.join(" ")));
         }
         Ok(())
+    }
+}
+
+#[async_trait::async_trait]
+impl NodeBackend for AzureBackend {
+    async fn ssh_exec(&self, command: &str) -> Result<String> {
+        let (rg, ip_name) = (&self.resource_group, format!("{}-ip", self.config.vm_name));
+        let mut args = vec!["network", "public-ip", "show", "--resource-group", rg];
+        args.extend(["--name", &ip_name]);
+        let result = self.az(&args).await?;
+
+        let public_ip = result["ipAddress"].as_str().unwrap();
+        ssh_exec(&format!(
+            "ssh -i {} -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null core@{public_ip} '{command}'",
+            self.config.ssh_private_key.display()
+        )).await
+    }
+
+    async fn get_root_key(&self, _: Client, _: &str) -> Result<Option<Vec<u8>>> {
+        Ok(None)
     }
 }
 
@@ -160,23 +181,6 @@ impl VmBackend for AzureBackend {
             statuses.iter().find(check).map(|_| ()).ok_or(err)
         };
         poller.poll_async(check_fn).await
-    }
-
-    async fn ssh_exec(&self, command: &str) -> Result<String> {
-        let (rg, ip_name) = (&self.resource_group, format!("{}-ip", self.config.vm_name));
-        let mut args = vec!["network", "public-ip", "show", "--resource-group", rg];
-        args.extend(["--name", &ip_name]);
-        let result = self.az(&args).await?;
-
-        let public_ip = result["ipAddress"].as_str().unwrap();
-        ssh_exec(&format!(
-            "ssh -i {} -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null core@{public_ip} '{command}'",
-            self.config.ssh_private_key.display()
-        )).await
-    }
-
-    async fn get_root_key(&self) -> Result<Option<Vec<u8>>> {
-        Ok(None)
     }
 
     async fn cleanup(&self) -> Result<()> {
