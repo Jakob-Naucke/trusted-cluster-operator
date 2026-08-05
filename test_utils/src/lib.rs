@@ -467,6 +467,7 @@ pub async fn get_encoded_root_pem(client: Client, namespace: &str) -> Result<Str
 
 static INIT: Once = Once::new();
 
+#[derive(Clone)]
 pub struct TestContext {
     client: Client,
     test_namespace: String,
