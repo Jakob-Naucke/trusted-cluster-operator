@@ -3,7 +3,7 @@
 #
 # SPDX-License-Identifier: CC0-1.0
 
-.PHONY: all build build-tools crds-rs generate manifests cluster-up cluster-down image push install-trustee install clean fmt-check clippy lint test test-release release-tarball
+.PHONY: all build build-tools crds-rs generate manifests cluster-up cluster-down image push install-trustee install clean fmt-check clippy lint test test-release release-tarball prepare-release
 
 SHELL := /bin/bash
 
@@ -37,6 +37,8 @@ KOPIUM ?= $(LOCALBIN)/kopium-$(KOPIUM_VERSION)
 
 REGISTRY ?= quay.io/trusted-execution-clusters
 TAG ?= latest
+# Image tags may use a leading v (e.g. v0.2.1); OLM requires bare semver, without 'v' prefix.
+OLM_VERSION ?= $(patsubst v%,%,$(TAG))
 PUSH_FLAGS ?=
 OPERATOR_IMAGE ?= $(REGISTRY)/trusted-cluster-operator:$(TAG)
 COMPUTE_PCRS_IMAGE=$(REGISTRY)/compute-pcrs:$(TAG)
@@ -68,7 +70,7 @@ CRD_WORK_PATH = config/crd/tmp
 RBAC_YAML_PATH = config/rbac
 API_PATH = api/v1alpha1
 generate: $(CONTROLLER_GEN)
-	$(call controller-gen,./...,*)
+	$(call controller-gen,./api/...,*)
 	$(call controller-gen,github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1,*)
 
 RS_LIB_PATH = lib/src
@@ -148,7 +150,7 @@ bundle: manifests
 	REG_SERVER_IMAGE=$(REG_SERVER_IMAGE) \
 	ATTESTATION_KEY_REGISTER_IMAGE=$(ATTESTATION_KEY_REGISTER_IMAGE) \
 	TRUSTEE_IMAGE=$(TRUSTEE_IMAGE) \
-	scripts/generate-bundle-prod.sh -v $(TAG) -n $(NAMESPACE) $(if $(PREVIOUS_CSV),-p $(PREVIOUS_CSV))
+	scripts/generate-bundle-prod.sh -v $(OLM_VERSION) -n $(NAMESPACE) $(if $(PREVIOUS_CSV),-p $(PREVIOUS_CSV))
 
 bundle-image: bundle
 	@echo "Building OLM bundle image..."
@@ -254,6 +256,12 @@ $(KOPIUM): $(LOCALBIN)
 
 build-tools: $(CONTROLLER_GEN) $(KOPIUM)
 yq: $(YQ)
+
+prepare-release:
+ifndef VERSION
+	$(error VERSION is undefined. Usage: make prepare-release VERSION=0.2.2 [DRY_RUN=1])
+endif
+	scripts/prepare-release.sh $(if $(DRY_RUN),--dry-run) $(VERSION)
 
 define go-install-tool
 [ -f "$(1)" ] || { \
