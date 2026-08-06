@@ -11,9 +11,28 @@ use k8s_openapi::{
     jiff::Timestamp,
 };
 use kube::api::ObjectMeta;
+use kube::runtime::reflector::{self, Lookup, Store};
+use kube::runtime::watcher;
 use std::collections::BTreeMap;
+use std::hash::Hash;
 use trusted_cluster_operator_lib::reference_values::{ImagePcr, ImagePcrs, PCR_CONFIG_FILE};
 use trusted_cluster_operator_lib::{Machine, MachineSpec};
+
+/// Build a reflector [`Store`] pre-populated with `items`, for tests that
+/// exercise code reading from an `OperatorContext` store instead of the API.
+pub fn store_with<K>(items: Vec<K>) -> Store<K>
+where
+    K: Lookup + Clone + 'static,
+    K::DynamicType: Eq + Hash + Clone + Default,
+{
+    let (store, mut writer) = reflector::store::<K>();
+    writer.apply_watcher_event(&watcher::Event::Init);
+    for item in items {
+        writer.apply_watcher_event(&watcher::Event::InitApply(item));
+    }
+    writer.apply_watcher_event(&watcher::Event::InitDone);
+    store
+}
 
 pub const DUMMY_PCR_4_VALUE: &str =
     "3f263b96ccbc33bb53d808771f9ab1e02d4dec8854f9530f749cde853a723273";
