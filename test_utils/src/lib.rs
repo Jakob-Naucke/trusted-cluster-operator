@@ -45,6 +45,7 @@ use compute_pcrs_lib::Pcr;
 const TEST_TIMEOUT_MULTIPLIER_ENV: &str = "TEST_TIMEOUT_MULTIPLIER";
 const EXPOSE_MAX_ATTEMPTS: u32 = 3;
 
+const UPSTREAM_DIR_ENV: &str = "UPSTREAM_DIR";
 const PLATFORM_ENV: &str = "PLATFORM";
 const CLUSTER_URL_ENV: &str = "CLUSTER_URL";
 const SET_CLUSTER_ERR: &str = "Set $CLUSTER_URL when $PLATFORM is none of: kind, openshift";
@@ -817,7 +818,10 @@ impl TestContext {
     async fn apply_operator_manifests(&self, approved_images: &[(&str, &str)]) -> Result<()> {
         let manifests_dir = &self.manifests_dir;
         self.info(format!("Generating manifests in {manifests_dir}"));
-        let workspace_root = env::current_dir()?.join("..");
+        let workspace_root = env::var(UPSTREAM_DIR_ENV)
+            .ok()
+            .map(PathBuf::from)
+            .unwrap_or(env::current_dir()?.join(".."));
         let (crd_temp_dir, rbac_temp_dir) = self
             .generate_manifests(&workspace_root, approved_images)
             .await?;
