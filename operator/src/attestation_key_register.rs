@@ -25,7 +25,7 @@ use kube::{
         watcher,
     },
 };
-use log::info;
+use log::{info, warn};
 use serde_json::json;
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
@@ -35,10 +35,8 @@ use trusted_cluster_operator_lib::{AttestationKey, AttestationKeyStatus, Machine
 
 use crate::conditions::attestation_key_approved_condition;
 use crate::trustee;
-use operator::{
-    ControllerError, TLS_DIR, controller_error_policy, create_or_info_if_exists, read_certificate,
-    upsert_condition,
-};
+use operator::{ControllerError, LONG_REQUEUE, TLS_DIR, controller_error_policy};
+use operator::{create_or_info_if_exists, read_certificate, upsert_condition};
 
 /// Shared context for the three attestation-key controllers.
 /// Stores give local cache access to avoid repeated API-server reads.
@@ -195,10 +193,10 @@ async fn ak_reconcile(
     for machine in ctx.machine_store.state() {
         if ak.spec.uuid.as_ref() == Some(&machine.spec.id) {
             approve_ak(&ak, &machine, &ctx).await?;
-            return Ok(Action::await_change());
+            return Ok(LONG_REQUEUE);
         }
     }
-    Ok(Action::await_change())
+    Ok(LONG_REQUEUE)
 }
 
 async fn machine_reconcile(
@@ -213,10 +211,10 @@ async fn machine_reconcile(
     // Check if the machine is being deleted
     if machine.metadata.deletion_timestamp.is_some() {
         info!(
-            "Machine {} is being deleted, updating attestation key volumes",
+            "Machine {} is being deleted, skipping update of attestation key volumes",
             machine.metadata.name.clone().unwrap_or_default()
         );
-        return Ok(Action::await_change());
+        return Ok(LONG_REQUEUE);
     }
 
     for ak in ctx.ak_store.state() {
@@ -224,10 +222,10 @@ async fn machine_reconcile(
             && *ak_uuid == machine.spec.id
         {
             approve_ak(&ak, &machine, &ctx).await?;
-            return Ok(Action::await_change());
+            return Ok(LONG_REQUEUE);
         }
     }
-    Ok(Action::await_change())
+    Ok(LONG_REQUEUE)
 }
 
 async fn approve_ak(ak: &AttestationKey, machine: &Machine, ctx: &AkContextData) -> Result<()> {
@@ -333,9 +331,9 @@ async fn secret_reconcile(
                 // On creation/update, just update the trustee deployment volumes
                 trustee::update_attestation_keys(&ctx)
                     .await
-                    .map(|_| Action::await_change())
+                    .map(|_| LONG_REQUEUE)
                     .map_err(|e| {
-                        eprintln!("Error updating attestation key volumes on secret apply: {e}");
+                        warn!("Error updating attestation key volumes on secret apply: {e}");
                         finalizer::Error::<ControllerError>::ApplyFailed(e.into())
                     })
             }
@@ -347,11 +345,9 @@ async fn secret_reconcile(
                 // Update trustee deployment - secrets with deletion_timestamp will be filtered out
                 trustee::update_attestation_keys(&ctx)
                     .await
-                    .map(|_| Action::await_change())
+                    .map(|_| LONG_REQUEUE)
                     .map_err(|e| {
-                        eprintln!(
-                            "Error updating attestation key volumes during secret deletion: {e}"
-                        );
+                        warn!("Error updating attestation key volumes during secret deletion: {e}");
                         finalizer::Error::<ControllerError>::CleanupFailed(e.into())
                     })
             }

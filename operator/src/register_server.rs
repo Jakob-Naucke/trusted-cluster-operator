@@ -142,7 +142,7 @@ async fn keygen_reconcile(
                     trustee::mount_secret(kube_client, id).await
                 }
                 .await
-                .map(|_| Action::await_change())
+                .map(|_| LONG_REQUEUE)
                 .map_err(|e| finalizer::Error::<ControllerError>::ApplyFailed(e.into()))
             }
             Event::Cleanup(machine) => {
@@ -168,7 +168,7 @@ async fn keygen_reconcile(
                                      skipping unmount_secret for Machine {}",
                                 machine.metadata.name.as_deref().unwrap_or("unknown")
                             );
-                            return Ok(Action::await_change());
+                            return Ok(LONG_REQUEUE);
                         }
                         Err(kube::Error::Api(ae)) if ae.code == 404 => {
                             // TEC already deleted, skip unmount_secret
@@ -177,7 +177,7 @@ async fn keygen_reconcile(
                                      skipping unmount_secret for Machine {}",
                                 machine.metadata.name.as_deref().unwrap_or("unknown")
                             );
-                            return Ok(Action::await_change());
+                            return Ok(LONG_REQUEUE);
                         }
                         _ => {
                             // TEC exists and is not being deleted, proceed with unmount_secret
@@ -187,7 +187,7 @@ async fn keygen_reconcile(
 
                 trustee::unmount_secret(kube_client, id)
                     .await
-                    .map(|_| Action::await_change())
+                    .map(|_| LONG_REQUEUE)
                     .map_err(|e| finalizer::Error::<ControllerError>::CleanupFailed(e.into()))
             }
         }
