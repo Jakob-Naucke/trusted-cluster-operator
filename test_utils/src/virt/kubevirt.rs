@@ -10,7 +10,7 @@ use std::{collections::BTreeMap, time::Duration};
 use tokio::time::timeout;
 use trusted_cluster_operator_lib::virtualmachines::*;
 
-use super::{NodeBackend, VmBackend, VmConfig, generate_ignition, ssh_exec};
+use super::{NodeBackend, VmBackend, VmConfig, generate_ignition, sh_exec};
 use crate::ensure_command;
 
 pub struct KubevirtBackend(pub VmConfig);
@@ -25,7 +25,7 @@ impl NodeBackend for KubevirtBackend {
             self.0.namespace,
         );
 
-        ssh_exec(&full_cmd).await
+        sh_exec(&full_cmd).await
     }
 }
 

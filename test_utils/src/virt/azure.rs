@@ -8,7 +8,7 @@ use serde_json::Value;
 use std::{env, time};
 use tokio::process::Command;
 
-use super::{NodeBackend, VmBackend, VmConfig, generate_ignition, ssh_exec};
+use super::{NodeBackend, VmBackend, VmConfig, generate_ignition, sh_exec};
 use crate::{Poller, ensure_command, warn_frame};
 
 const KEEP_ALIVE_MINUTES: i64 = 60;
@@ -66,7 +66,7 @@ impl NodeBackend for AzureBackend {
         let result = self.az(&args).await?;
 
         let public_ip = result["ipAddress"].as_str().unwrap();
-        ssh_exec(&format!(
+        sh_exec(&format!(
             "ssh -i {} -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null core@{public_ip} '{command}'",
             self.config.ssh_private_key.display()
         )).await
