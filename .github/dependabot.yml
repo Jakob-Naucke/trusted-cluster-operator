@@ -36,6 +36,8 @@ updates:
         versions: [">=0.24"]
       - dependency-name: "sigs.k8s.io/controller-tools"
         versions: [">=0.21"]
+      - dependency-name: "github.com/cert-manager/cert-manager"
+        versions: [">=1.21"]
   - package-ecosystem: "cargo"
     directory: "/"
     schedule:
