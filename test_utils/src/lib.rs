@@ -4,6 +4,7 @@
 // SPDX-License-Identifier: MIT
 
 use anyhow::{Context, Result, anyhow};
+use constants::APPROVED_IMAGE_NAME;
 use fs_extra::dir;
 use glob::glob;
 use k8s_openapi::api::apps::v1::{Deployment, DeploymentCondition, DeploymentStatus};
@@ -15,6 +16,7 @@ use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
 use kube::api::{DeleteParams, ObjectMeta, Patch};
 use kube::runtime::wait::await_condition;
 use kube::{Api, Client};
+use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
 use serde_json::json;
 use std::path::{Path, PathBuf};
 use std::{collections::BTreeMap, env, sync::Once, time::Duration};
@@ -43,6 +45,7 @@ use compute_pcrs_lib::Pcr;
 const TEST_TIMEOUT_MULTIPLIER_ENV: &str = "TEST_TIMEOUT_MULTIPLIER";
 const EXPOSE_MAX_ATTEMPTS: u32 = 3;
 
+const UPSTREAM_DIR_ENV: &str = "UPSTREAM_DIR";
 const PLATFORM_ENV: &str = "PLATFORM";
 const CLUSTER_URL_ENV: &str = "CLUSTER_URL";
 const SET_CLUSTER_ERR: &str = "Set $CLUSTER_URL when $PLATFORM is none of: kind, openshift";
@@ -164,7 +167,7 @@ fn get_virt_provider() -> Result<VirtProvider> {
     }
 }
 
-fn get_env(name: &str) -> Result<String> {
+pub fn get_env(name: &str) -> Result<String> {
     env::var(name).map_err(|e| anyhow!("Environment variable {name} is required: {e}"))
 }
 
@@ -457,8 +460,20 @@ pub async fn get_cluster_url(
         .await
 }
 
+pub async fn get_encoded_root_pem(client: Client, namespace: &str) -> Result<String> {
+    let secrets: Api<Secret> = Api::namespaced(client.clone(), namespace);
+    let root_secret = secrets.get(ROOT_SECRET).await?;
+    let ctx = format!("Root secret {ROOT_SECRET} had no ca.crt");
+    let root_secret_data = root_secret.data.context(ctx.clone())?;
+    let ca_pem_bytes = root_secret_data.get("ca.crt").context(ctx)?;
+    let root_pem = String::from_utf8(ca_pem_bytes.0.clone())?;
+    let encoded = utf8_percent_encode(&root_pem, NON_ALPHANUMERIC);
+    Ok(format!("data:,{encoded}"))
+}
+
 static INIT: Once = Once::new();
 
+#[derive(Clone)]
 pub struct TestContext {
     client: Client,
     test_namespace: String,
@@ -482,7 +497,7 @@ impl TestContext {
 
         let ctx = Self {
             client,
-            test_namespace: namespace,
+            test_namespace: namespace.clone(),
             manifests_dir: String::new(),
             test_name: test_name.to_string(),
             delayed_approved_image,
@@ -495,11 +510,7 @@ impl TestContext {
         ctx.create_namespace().await?;
         ctx.apply_operator_manifests(approved_images).await?;
 
-        test_info!(
-            &ctx.test_name,
-            "Execute test in the namespace {}",
-            ctx.test_namespace
-        );
+        test_info!(&ctx.test_name, "Execute test in the namespace {namespace}");
 
         Ok(ctx)
     }
@@ -538,11 +549,7 @@ impl TestContext {
     }
 
     async fn create_namespace(&self) -> Result<()> {
-        test_info!(
-            &self.test_name,
-            "Creating test namespace: {}",
-            self.test_namespace
-        );
+        self.info(format!("Creating test namespace: {}", self.test_namespace));
         let namespace_api: Api<Namespace> = Api::all(self.client.clone());
         let namespace = Namespace {
             metadata: k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta {
@@ -581,20 +588,12 @@ impl TestContext {
 
         for tec in &tec_list.items {
             if let Some(name) = &tec.metadata.name {
-                test_info!(
-                    &self.test_name,
-                    "Deleting TrustedExecutionCluster: {}",
-                    name
-                );
+                self.info(format!("Deleting TrustedExecutionCluster: {name}"));
                 tec_api.delete(name, &dp).await?;
 
                 // Wait for the resource to be deleted
                 wait_for_resource_deleted(&tec_api, name, scaled_timeout(120)).await?;
-                test_info!(
-                    &self.test_name,
-                    "TrustedExecutionCluster {} has been deleted",
-                    name
-                );
+                self.info(format!("TrustedExecutionCluster {name} has been deleted"));
             }
         }
 
@@ -610,10 +609,10 @@ impl TestContext {
                 namespace_api.delete(&self.test_namespace, &dp).await?;
                 let timeout = scaled_timeout(300);
                 wait_for_resource_deleted(&namespace_api, &self.test_namespace, timeout).await?;
-                test_info!(&self.test_name, "Deleted namespace {}", self.test_namespace);
+                self.info(format!("Deleted namespace {}", self.test_namespace));
             }
             Err(kube::Error::Api(ae)) if ae.code == 404 => {
-                test_info!(&self.test_name, "Namespace already deleted");
+                self.info("Namespace already deleted");
             }
             Err(e) => return Err(e.into()),
         }
@@ -625,21 +624,15 @@ impl TestContext {
         let manifests_dir = temp_dir.join(format!("manifests-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&manifests_dir)?;
         let dir_str = manifests_dir.to_str().unwrap();
-        test_info!(
-            &self.test_name,
-            "Created temp manifests directory: {dir_str}",
-        );
+        self.info(format!("Created temp manifests directory: {dir_str}"));
         Ok(dir_str.to_string())
     }
 
     fn cleanup_manifests_dir(&self) -> Result<()> {
         if Path::new(&self.manifests_dir).exists() {
             std::fs::remove_dir_all(&self.manifests_dir)?;
-            test_info!(
-                &self.test_name,
-                "Removed manifests directory: {}",
-                self.manifests_dir
-            );
+            let manifests_dir = &self.manifests_dir;
+            self.info(format!("Removed manifests directory: {manifests_dir}",));
         }
         Ok(())
     }
@@ -753,11 +746,10 @@ impl TestContext {
         let err = anyhow!("No controller-gen found in bin/, run `make build-tools` first");
         let controller_gen_path = glob::glob(pattern)?.next().ok_or(err)??;
 
-        test_info!(
-            &self.test_name,
+        self.info(format!(
             "Generating CRDs and RBAC with controller-gen at: {}",
-            controller_gen_path.display()
-        );
+            controller_gen_path.display(),
+        ));
 
         let crd_temp_dir = Path::new(&self.manifests_dir).join("crd");
         let rbac_dir = workspace_root.join("config/rbac/");
@@ -782,8 +774,7 @@ impl TestContext {
             let stderr = String::from_utf8_lossy(&crd_gen_output.stderr);
             return Err(anyhow!("Failed to generate CRDs and RBAC: {stderr}"));
         }
-
-        test_info!(&self.test_name, "CRDs and RBAC generated successfully");
+        self.info("CRDs and RBAC generated successfully");
 
         let trusted_cluster_gen_path = workspace_root.join("trusted-cluster-gen");
         if !trusted_cluster_gen_path.exists() {
@@ -831,12 +822,15 @@ impl TestContext {
 
     async fn apply_operator_manifests(&self, approved_images: &[(&str, &str)]) -> Result<()> {
         let manifests_dir = &self.manifests_dir;
-        test_info!(&self.test_name, "Generating manifests in {manifests_dir}");
-        let workspace_root = env::current_dir()?.join("..");
+        self.info(format!("Generating manifests in {manifests_dir}"));
+        let workspace_root = env::var(UPSTREAM_DIR_ENV)
+            .ok()
+            .map(PathBuf::from)
+            .unwrap_or(env::current_dir()?.join(".."));
         let (crd_temp_dir, rbac_temp_dir) = self
             .generate_manifests(&workspace_root, approved_images)
             .await?;
-        test_info!(&self.test_name, "Manifests generated successfully");
+        self.info("Manifests generated successfully");
 
         self.set_certificates().await?;
         let tec = "trustedexecutionclusters.trusted-execution-clusters.io";
@@ -844,10 +838,7 @@ impl TestContext {
         let crd_check_output = kubectl().args(args).output().await?;
 
         if crd_check_output.status.success() {
-            test_info!(
-                &self.test_name,
-                "TrustedExecutionCluster CRD already exists, skipping CRD creation"
-            );
+            self.info("TrustedExecutionCluster CRD already exists, skipping CRD creation");
         } else {
             kube_apply!(
                 crd_temp_dir.to_str().unwrap(),
@@ -857,8 +848,7 @@ impl TestContext {
             );
         }
 
-        test_info!(&self.test_name, "Preparing RBAC manifests");
-
+        self.info("Preparing RBAC manifests");
         let ns = self.test_namespace.clone();
         let sa_src = workspace_root.join("config/rbac/service_account.yaml");
         let sa_content = std::fs::read_to_string(&sa_src)?
@@ -895,7 +885,7 @@ impl TestContext {
         let le_rb_dst = rbac_temp_dir.join("leader_election_role_binding.yaml");
         std::fs::write(&le_rb_dst, le_rb_content)?;
 
-        test_info!(&self.test_name, "Preparing RBAC kustomization");
+        self.info("Preparing RBAC kustomization");
         let platform = get_k8s_platform(&self.client, &self.test_namespace);
         let kustomization_src = workspace_root.join("config/rbac/kustomization.yaml.in");
         let kustomization_content = std::fs::read_to_string(&kustomization_src)?;
@@ -932,10 +922,7 @@ impl TestContext {
             "Applying operator manifest"
         );
 
-        test_info!(
-            &self.test_name,
-            "Updating CR manifest with publicTrusteeAddr"
-        );
+        self.info("Updating CR manifest with publicTrusteeAddr");
 
         self.apply_cr_manifests(manifests_path).await
     }
@@ -1010,8 +997,7 @@ impl TestContext {
             TRUSTEE_DEPLOYMENT,
             ATTESTATION_KEY_REGISTER_DEPLOYMENT,
         ] {
-            let info = format!("Waiting for deployment {depl} to be ready");
-            test_info!(&self.test_name, "{info}");
+            self.info(format!("Waiting for deployment {depl} to be ready"));
             let done = await_condition(depls.clone(), depl, depl_ready);
             let ctx = format!("waiting for deployment {depl} to be ready");
             timeout(scaled_duration(300), done).await.context(ctx)??;
@@ -1049,20 +1035,14 @@ impl TestContext {
         tecs.patch("trusted-execution-cluster", &Default::default(), &patch)
             .await?;
         let info = format!("Updated TEC resource with publicTrusteeAddr: {trustee_addr}");
-        test_info!(&self.test_name, "{info}");
+        self.info(info);
 
-        test_info!(
-            &self.test_name,
-            "Waiting for image-pcrs ConfigMap to be created"
-        );
+        self.info("Waiting for image-pcrs ConfigMap to be created");
         let configmap_api: Api<ConfigMap> = Api::namespaced(self.client.clone(), ns);
         wait_for_resource_created(&configmap_api, "image-pcrs", scaled_timeout(60)).await?;
 
-        let info = format!(
-            "Waiting for ApprovedImage {} to be Committed",
-            constants::APPROVED_IMAGE_NAME
-        );
-        test_info!(&self.test_name, "{info}");
+        let info = format!("Waiting for ApprovedImage {APPROVED_IMAGE_NAME} to be Committed");
+        self.info(info);
         let images: Api<ApprovedImage> = Api::namespaced(self.client.clone(), ns);
         let image_ready = |img: Option<&ApprovedImage>| {
             let chk_cond = |c: &Condition| c.type_ == COMMITTED_CONDITION && c.status == "True";

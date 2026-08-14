@@ -10,13 +10,18 @@
 
 SHELL := /bin/bash
 
+# Define directory of this Makefile so it can be `include`d from
+# elsewhere without variables breaking, e.g. for use of controller-gen
+# & kopium from this directory's LOCALBIN.
+MAKEFILE_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
+
 NAMESPACE ?= trusted-execution-clusters
 PLATFORM ?= kind
 
 KUBECTL=kubectl
 INTEGRATION_TEST_THREADS ?= 1
 
-LOCALBIN ?= $(shell pwd)/bin
+LOCALBIN ?= $(MAKEFILE_DIR)/bin
 # either linux or darwin
 OS ?= $(shell uname -s | tr '[:upper:]' '[:lower:]')
 # either x86_64/amd64 or aarch64/arm64
@@ -31,11 +36,11 @@ else ifeq ($(OS),darwin)
   KOPIUM_TARGET := $(KOPIUM_RUST_ARCH)-apple-darwin
 endif
 
-CONTROLLER_TOOLS_VERSION ?= $(shell go list -m -f '{{.Version}}' sigs.k8s.io/controller-tools)
+CONTROLLER_TOOLS_VERSION ?= $(shell cd $(MAKEFILE_DIR) && go list -m -f '{{.Version}}' sigs.k8s.io/controller-tools)
 CONTROLLER_GEN ?= $(LOCALBIN)/controller-gen-$(CONTROLLER_TOOLS_VERSION)
-YQ_VERSION ?= $(shell go list -m -f '{{.Version}}' github.com/mikefarah/yq/v4)
+YQ_VERSION ?= $(shell cd $(MAKEFILE_DIR) && go list -m -f '{{.Version}}' github.com/mikefarah/yq/v4)
 YQ ?= $(LOCALBIN)/yq-$(YQ_VERSION)
-KOPIUM_VERSION ?= $(shell cargo metadata --format-version 1 | jq -r '.resolve.nodes[] | select(.deps[]?.name == "kopium") | .deps[] | select(.name == "kopium") | .pkg | split("@")[1]')
+KOPIUM_VERSION ?= $(shell cd $(MAKEFILE_DIR) && cargo metadata --format-version 1 | jq -r '.resolve.nodes[] | select(.deps[]?.name == "kopium") | .deps[] | select(.name == "kopium") | .pkg | split("@")[1]')
 KOPIUM ?= $(LOCALBIN)/kopium-$(KOPIUM_VERSION)
 
 REGISTRY ?= quay.io/trusted-execution-clusters

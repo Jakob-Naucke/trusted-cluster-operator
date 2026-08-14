@@ -3,17 +3,31 @@
 //
 // SPDX-License-Identifier: MIT
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result};
 use k8s_openapi::{api::core::v1::Secret, apimachinery::pkg::util::intstr::IntOrString};
 use kube::{Api, api::ObjectMeta, runtime::wait::await_condition};
 use std::{collections::BTreeMap, time::Duration};
 use tokio::time::timeout;
 use trusted_cluster_operator_lib::virtualmachines::*;
 
-use super::{VmBackend, VmConfig, generate_ignition, ssh_exec};
+use super::{NodeBackend, VmBackend, VmConfig, generate_ignition, sh_exec};
 use crate::ensure_command;
 
 pub struct KubevirtBackend(pub VmConfig);
+
+#[async_trait::async_trait]
+impl NodeBackend for KubevirtBackend {
+    async fn ssh_exec(&self, command: &str) -> Result<String> {
+        let full_cmd = format!(
+            "virtctl ssh -i {} core@vmi/{}/{} -t '-o IdentitiesOnly=yes' -t '-o StrictHostKeyChecking=no' --known-hosts /dev/null -c '{command}'",
+            self.0.ssh_private_key.display(),
+            self.0.vm_name,
+            self.0.namespace,
+        );
+
+        sh_exec(&full_cmd).await
+    }
+}
 
 #[async_trait::async_trait]
 impl VmBackend for KubevirtBackend {
@@ -153,39 +167,6 @@ impl VmBackend for KubevirtBackend {
         let duration = Duration::from_secs(timeout_secs);
         timeout(duration, done).await.context(ctx)??;
         Ok(())
-    }
-
-    async fn ssh_exec(&self, command: &str) -> Result<String> {
-        let full_cmd = format!(
-            "virtctl ssh -i {} core@vmi/{}/{} -t '-o IdentitiesOnly=yes' -t '-o StrictHostKeyChecking=no' --known-hosts /dev/null -c '{command}'",
-            self.0.ssh_private_key.display(),
-            self.0.vm_name,
-            self.0.namespace,
-        );
-
-        ssh_exec(&full_cmd).await
-    }
-
-    async fn get_root_key(&self) -> Result<Option<Vec<u8>>> {
-        // Extract the UUID from the Clevis token in the LUKS header
-        let uuid_cmd = "sudo cryptsetup token export --token-id 0 /dev/vda4 | jq -r \".jwe.protected\" | base64 -d | jq -r \".clevis.path\" | cut -d/ -f2";
-        let uuid_output = self
-            .ssh_exec(uuid_cmd)
-            .await
-            .context("Failed to extract UUID from VM")?;
-        let uuid = uuid_output.trim();
-
-        if uuid.is_empty() {
-            return Err(anyhow!("Retrieved empty UUID from VM"));
-        }
-
-        // Use the UUID to get the secret (secrets are named with just the UUID)
-        let secrets: Api<Secret> = Api::namespaced(self.0.client.clone(), &self.0.namespace);
-        let secret = secrets
-            .get(uuid)
-            .await
-            .context(format!("Failed to get secret for UUID {uuid}"))?;
-        Ok(Some(secret.data.unwrap().get("root").unwrap().0.clone()))
     }
 
     async fn cleanup(&self) -> Result<()> {
