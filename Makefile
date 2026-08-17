@@ -108,7 +108,7 @@ manifests: trusted-cluster-gen generate
 		-pcrs-compute-image $(COMPUTE_PCRS_IMAGE) \
 		-register-server-image $(REG_SERVER_IMAGE) \
 		-attestation-key-register-image $(ATTESTATION_KEY_REGISTER_IMAGE) \
-		-approved-image $(APPROVED_IMAGE)
+		-approved-image coreos,$(APPROVED_IMAGE)
 
 cluster-up:
 	RUNTIME=$(RUNTIME) scripts/create-cluster-kind.sh
