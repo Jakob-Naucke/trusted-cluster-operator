@@ -5,6 +5,7 @@
 # SPDX-License-Identifier: CC0-1.0
 
 ARG build_type=release
+ARG build_target=operator
 
 # Unified builder stage — compiles all binaries in a single cargo invocation.
 FROM ghcr.io/trusted-execution-clusters/buildroot:fedora AS builder
@@ -100,3 +101,6 @@ FROM quay.io/fedora/fedora:43 AS compute-pcrs
 COPY --from=compute-pcrs-data /output/compute-pcrs /usr/bin
 COPY --from=compute-pcrs-data /output/reference-values /reference-values
 ENTRYPOINT ["/usr/bin/compute-pcrs"]
+
+# Allow environments without --target support, which only read the last stage, to set the stage through the build arg
+FROM ${build_target} AS final
