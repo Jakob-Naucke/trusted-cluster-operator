@@ -290,6 +290,7 @@ enum OpenShiftHost {
 impl OpenShift {
     async fn get_url(&self, service: &str) -> OpenShiftHost {
         let services: Api<Service> = Api::namespaced(self.client.clone(), &self.namespace);
+        test_info!(self.namespace, "get service for URL");
         let Ok(svc) = services.get(service).await else {
             return OpenShiftHost::None;
         };
@@ -327,6 +328,7 @@ impl K8sPlatform for OpenShift {
         let mut url = OpenShiftHost::None;
         let mut last_err: Option<anyhow::Error> = None;
         for attempt in 1..=EXPOSE_MAX_ATTEMPTS {
+            test_info!(self.namespace, "patching lb");
             services.patch(service, &pp, &Patch::Merge(&lb)).await?;
 
             let has_ingress = |svc: Option<&Service>| {
@@ -335,6 +337,7 @@ impl K8sPlatform for OpenShift {
                 let chk_svc = |svc: &Service| svc.status.as_ref().and_then(chk_st);
                 svc.and_then(chk_svc).unwrap_or(false)
             };
+            test_info!(self.namespace, "wait for ingress");
             let ctx = format!(
                 "waiting for ingress on {service} (attempt {attempt}/{EXPOSE_MAX_ATTEMPTS})"
             );
@@ -342,10 +345,12 @@ impl K8sPlatform for OpenShift {
             match timeout(duration, ingress_ready).await {
                 Err(_) => {
                     last_err = Some(anyhow!(ctx));
+                    test_info!(self.namespace, "timeout wait for ingress");
                     services.patch(service, &pp, &clusterip).await?;
                     continue;
                 }
                 Ok(Err(e)) => {
+                    test_info!(self.namespace, "failing waiting for ingress");
                     last_err = Some(anyhow::Error::from(e).context(ctx));
                     services.patch(service, &pp, &clusterip).await?;
                     continue;
@@ -358,10 +363,14 @@ impl K8sPlatform for OpenShift {
                 let target = format!("{name}:0");
                 let msg =
                     format!("{name} not DNS-resolvable (attempt {attempt}/{EXPOSE_MAX_ATTEMPTS})");
-                let chk = || async { tokio::net::lookup_host(&target).await.map(|_| ()) };
+                let chk = || async {
+                    test_info!(self.namespace, "lookup host");
+                    tokio::net::lookup_host(&target).await.map(|_| ())
+                };
                 let poller = Poller::new().with_timeout(duration);
                 if let Err(e) = poller.with_error_message(msg).poll_async(chk).await {
                     last_err = Some(e);
+                    test_info!(self.namespace, "failing waiting for resolve");
                     services.patch(service, &pp, &clusterip).await?;
                     continue;
                 }
@@ -375,6 +384,7 @@ impl K8sPlatform for OpenShift {
         }
 
         let certs: Api<Certificate> = Api::namespaced(self.client.clone(), &self.namespace);
+        test_info!(self.namespace, "get cert");
         let cert = certs.get(cert_name).await?;
         let old_revision = cert.status.and_then(|st| st.revision).unwrap_or(0);
         let cert_patch = match url {
@@ -395,6 +405,7 @@ impl K8sPlatform for OpenShift {
             }
         };
         let cert_merge = Patch::Merge(cert_patch);
+        test_info!(self.namespace, "patch cert");
         certs.patch(cert_name, &pp, &cert_merge).await?;
 
         let cert_reissued = |cert: Option<&Certificate>| {
@@ -404,9 +415,11 @@ impl K8sPlatform for OpenShift {
         };
         let cert_done = await_condition(certs, cert_name, cert_reissued);
         let ctx = format!("waiting for cert {cert_name} to have a rev newer than {old_revision}");
+        test_info!(self.namespace, "wait for new cert");
         timeout(duration, cert_done).await.context(ctx)??;
 
         let deployments: Api<Deployment> = Api::namespaced(self.client.clone(), &self.namespace);
+        test_info!(self.namespace, "restart deployment");
         deployments.restart(deployment).await?;
 
         Ok(())
@@ -1022,6 +1035,7 @@ impl TestContext {
                 .await?;
         }
 
+        self.info("waiting for services to exist");
         let svc = ATTESTATION_KEY_REGISTER_SERVICE;
         let services: Api<Service> = Api::namespaced(self.client.clone(), ns);
         for svc in [REGISTER_SERVER_SERVICE, TRUSTEE_SERVICE, svc] {
@@ -1030,6 +1044,7 @@ impl TestContext {
             timeout(scaled_duration(60), done).await.context(ctx)??;
         }
 
+        self.info("exposing services");
         let platform = get_k8s_platform(&self.client, &self.test_namespace);
         let svc = REGISTER_SERVER_SERVICE;
         let depl = REGISTER_SERVER_DEPLOYMENT;
@@ -1051,6 +1066,7 @@ impl TestContext {
             }
         });
         let patch = Patch::Merge(&json);
+        self.info("patch TEC");
         tecs.patch("trusted-execution-cluster", &Default::default(), &patch)
             .await?;
         let info = format!("Updated TEC resource with publicTrusteeAddr: {trustee_addr}");
