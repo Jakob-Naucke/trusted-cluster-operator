@@ -72,16 +72,16 @@ RUN --mount=type=cache,target=/build/target \
     cp /build/target/${profile_dir}/attestation-key-register /output/
 
 # Distribution stages
-FROM quay.io/fedora/fedora:43 AS operator
+FROM quay.io/fedora/fedora-minimal:43 AS operator
 COPY --from=builder /output/operator /usr/bin
 ENTRYPOINT ["/usr/bin/operator"]
 
-FROM quay.io/fedora/fedora:43 AS attestation-key-register
+FROM quay.io/fedora/fedora-minimal:43 AS attestation-key-register
 COPY --from=builder /output/attestation-key-register /usr/bin
 EXPOSE 8001
 ENTRYPOINT ["/usr/bin/attestation-key-register"]
 
-FROM quay.io/fedora/fedora:43 AS register-server
+FROM quay.io/fedora/fedora-minimal:43 AS register-server
 COPY --from=builder /output/register-server /usr/bin
 EXPOSE 3030
 ENTRYPOINT ["/usr/bin/register-server"]
@@ -97,7 +97,7 @@ RUN mkdir -p /output/reference-values && \
     mv /build/reference-values/efivars /output/reference-values/ && \
     mv /build/reference-values/mok-variables /output/reference-values/
 
-FROM quay.io/fedora/fedora:43 AS compute-pcrs
+FROM quay.io/fedora/fedora-minimal:43 AS compute-pcrs
 COPY --from=compute-pcrs-data /output/compute-pcrs /usr/bin
 COPY --from=compute-pcrs-data /output/reference-values /reference-values
 ENTRYPOINT ["/usr/bin/compute-pcrs"]
