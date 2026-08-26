@@ -5433,6 +5433,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "auto_impl",
+ "base64 0.23.1",
  "chrono",
  "clevis-pin-trustee-lib",
  "compute-pcrs-lib",

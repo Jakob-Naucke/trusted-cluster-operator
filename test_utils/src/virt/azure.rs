@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: MIT
 
 use anyhow::{Context, Result, anyhow};
+use base64::Engine;
 use kube::Client;
 use serde_json::Value;
 use std::{env, time};
@@ -77,6 +78,36 @@ impl NodeBackend for AzureBackend {
     }
 }
 
+/// Generate ovf-env.xml for ignition. TODO revert to passing
+/// CustomData.bin once Azure has fully rolled out a fix.
+fn generate_ovf_xml(ignition: serde_json::Value) -> String {
+    let encoded = base64::engine::general_purpose::STANDARD.encode(ignition.to_string());
+    // XXX check which are necessary
+    format!(
+        "<?xml version=\"1.0\" encoding=\"utf-8\"?>
+<ns0:Environment xmlns:ns0=\"http://schemas.dmtf.org/ovf/environment/1\"
+  xmlns:ns1=\"http://schemas.microsoft.com/windowsazure\"
+  xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\">
+  <ns1:ProvisioningSection>
+    <ns1:Version>1.0</ns1:Version>
+    <ns1:LinuxProvisioningConfigurationSet>
+      <ns1:ConfigurationSetType>LinuxProvisioningConfiguration</ns1:ConfigurationSetType>
+      <ns1:HostName>host</ns1:HostName>
+      <ns1:UserName>core</ns1:UserName>
+      <ns1:CustomData>{encoded}</ns1:CustomDat>
+      <ns1:DisableSshPasswordAuthentication>true</ns1:DisableSshPasswordAuthentication>
+    </ns1:LinuxProvisioningConfigurationSet>
+  </ns1:ProvisioningSection>
+  <ns1:PlatformSettingsSection>
+    <ns1:Version>1.0</ns1:Version>
+    <ns1:PlatformSettings>
+      <ns1:ProvisionGuestAgent>true</ns1:ProvisionGuestAgent>
+    </ns1:PlatformSettings>
+  </ns1:PlatformSettingsSection>
+</ns0:Environment>"
+    )
+}
+
 #[async_trait::async_trait]
 impl VmBackend for AzureBackend {
     async fn create_vm(&self) -> Result<()> {
@@ -119,7 +150,7 @@ impl VmBackend for AzureBackend {
         self.az_rg(args).await?;
 
         let ign = generate_ignition(&self.config).await?;
-        let custom_data = ign.to_string();
+        let custom_data = generate_ovf_xml(ign);
         if !self.config.image.starts_with('/') && self.config.image.split(':').count() < 4 {
             let err = "Invalid Image URN. Expected 'Publisher:Offer:Sku:Version'";
             return Err(anyhow!(err));
