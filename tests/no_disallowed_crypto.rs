@@ -94,6 +94,10 @@ const ALLOWED_CRYPTO_CRATES: &[&str] = &[
     "superboring",
     "universal-hash",
     "zeroize_derive",
+    // Pulled in by authenticode. Formats only, no actual cryptography
+    "cms",
+    "der_derive",
+    "x509-cert",
 ];
 
 // Target we actually build and ship for; keeps platform-only crates.
