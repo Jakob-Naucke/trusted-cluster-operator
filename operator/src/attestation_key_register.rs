@@ -23,13 +23,13 @@ use std::{collections::BTreeMap, sync::Arc};
 
 use trusted_cluster_operator_lib::conditions::ATTESTATION_KEY_MACHINE_APPROVE;
 use trusted_cluster_operator_lib::endpoints::*;
-use trusted_cluster_operator_lib::{AttestationKey, AttestationKeyStatus, Machine, update_status};
+use trusted_cluster_operator_lib::{AttestationKey, Machine};
 
 use crate::conditions::attestation_key_approved_condition;
 use crate::trustee;
 use operator::{
     ControllerError, KIND_LABEL_KEY, LONG_REQUEUE, OperatorContext, TLS_DIR,
-    controller_error_policy, create_or_info_if_exists, read_certificate, upsert_condition,
+    controller_error_policy, create_or_info_if_exists, patch_status_condition, read_certificate,
 };
 
 const INTERNAL_ATTESTATION_KEY_REGISTER_PORT: i32 = 8001;
@@ -188,15 +188,21 @@ async fn approve_ak(ak: &AttestationKey, machine: &Machine, ctx: &OperatorContex
     let client = &ctx.client;
     let aks: Api<AttestationKey> = Api::default_namespaced(client.clone());
 
-    let generation = ak.metadata.generation;
-    let approve_reason = ATTESTATION_KEY_MACHINE_APPROVE;
-    let condition = attestation_key_approved_condition(approve_reason, generation, &ak.status);
-    let mut conditions = ak.status.as_ref().and_then(|s| s.conditions.clone());
-    let changed = upsert_condition(&mut conditions, condition);
+    let condition = attestation_key_approved_condition(
+        ATTESTATION_KEY_MACHINE_APPROVE,
+        ak.metadata.generation,
+        &ak.status,
+    );
 
-    if changed {
-        let status = AttestationKeyStatus { conditions };
-        update_status!(aks, &name, status)?;
+    if patch_status_condition::<AttestationKey, _>(
+        client.clone(),
+        &name,
+        &ak.status,
+        condition,
+        "attestation-key-register",
+    )
+    .await?
+    {
         info!("Approved attestation key {name}");
     }
 
