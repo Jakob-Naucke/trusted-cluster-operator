@@ -6,6 +6,7 @@
 
 ARG build_type=release
 ARG build_target=operator
+ARG deployment_base=quay.io/fedora/fedora-minimal:43
 
 # Unified builder stage — compiles all binaries in a single cargo invocation.
 FROM ghcr.io/trusted-execution-clusters/buildroot:fedora AS builder
@@ -72,16 +73,16 @@ RUN --mount=type=cache,target=/build/target \
     cp /build/target/${profile_dir}/attestation-key-register /output/
 
 # Distribution stages
-FROM quay.io/fedora/fedora-minimal:43 AS operator
+FROM ${deployment_base} AS operator
 COPY --from=builder /output/operator /usr/bin
 ENTRYPOINT ["/usr/bin/operator"]
 
-FROM quay.io/fedora/fedora-minimal:43 AS attestation-key-register
+FROM ${deployment_base} AS attestation-key-register
 COPY --from=builder /output/attestation-key-register /usr/bin
 EXPOSE 8001
 ENTRYPOINT ["/usr/bin/attestation-key-register"]
 
-FROM quay.io/fedora/fedora-minimal:43 AS register-server
+FROM ${deployment_base} AS register-server
 COPY --from=builder /output/register-server /usr/bin
 EXPOSE 3030
 ENTRYPOINT ["/usr/bin/register-server"]
@@ -97,7 +98,7 @@ RUN mkdir -p /output/reference-values && \
     mv /build/reference-values/efivars /output/reference-values/ && \
     mv /build/reference-values/mok-variables /output/reference-values/
 
-FROM quay.io/fedora/fedora-minimal:43 AS compute-pcrs
+FROM ${deployment_base} AS compute-pcrs
 COPY --from=compute-pcrs-data /output/compute-pcrs /usr/bin
 COPY --from=compute-pcrs-data /output/reference-values /reference-values
 ENTRYPOINT ["/usr/bin/compute-pcrs"]
