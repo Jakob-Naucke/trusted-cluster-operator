@@ -22,3 +22,11 @@ pub const NOT_COMMITTED_REASON_PENDING: &str = "PodPending";
 pub const ATTESTATION_KEY_APPROVED_CONDITION: &str = "Approved";
 pub const ATTESTATION_KEY_REGISTRATION_REASON: &str = "Registration";
 pub const ATTESTATION_KEY_MACHINE_APPROVE: &str = "MachineCreated";
+
+pub const MACHINE_KEY_PROVISIONED_CONDITION: &str = "KeyProvisioned";
+pub const MACHINE_KEY_PROVISIONED_REASON: &str = "SecretMounted";
+pub const MACHINE_KEY_NOT_PROVISIONED_REASON: &str = "ProvisioningFailed";
+
+pub const MACHINE_AK_APPROVED_CONDITION: &str = "AttestationKeyApproved";
+pub const MACHINE_AK_APPROVED_REASON: &str = "KeyApproved";
+pub const MACHINE_AK_NOT_APPROVED_REASON: &str = "NoKeyMatched";

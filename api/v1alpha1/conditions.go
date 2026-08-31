@@ -26,4 +26,12 @@ const (
 	AttestationKeyApprovedCondition     string = "Approved"
 	AttestationKeyRegistrationReason    string = "Registration"
 	AttestationKeyMachineApprovedReason string = "MachineCreated"
+
+	// Conditions for the Machine
+	MachineKeyProvisionedCondition string = "KeyProvisioned"
+	MachineKeyProvisionedReason    string = "SecretMounted"
+	MachineKeyNotProvisionedReason string = "ProvisioningFailed"
+	MachineAkApprovedCondition     string = "AttestationKeyApproved"
+	MachineAkApprovedReason        string = "KeyApproved"
+	MachineAkNotApprovedReason     string = "NoKeyMatched"
 )
