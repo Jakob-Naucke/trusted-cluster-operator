@@ -23,6 +23,8 @@ use std::{sync::Arc, time::Duration};
 use tokio::time::timeout;
 
 // Re-export common functions from the lib
+use kube::api::{Patch, PatchParams};
+use trusted_cluster_operator_lib::Conditions;
 pub use trusted_cluster_operator_lib::generate_owner_reference;
 use trusted_cluster_operator_lib::{
     ApprovedImage, AttestationKey, Machine, TrustedExecutionCluster,
@@ -215,4 +217,37 @@ pub fn upsert_condition(
         conditions_vec.push(new_condition);
         true
     }
+}
+
+pub async fn patch_status_condition<K, S>(
+    client: Client,
+    name: &str,
+    existing_status: &Option<S>,
+    condition: Condition,
+    field_manager: &str,
+) -> Result<bool>
+where
+    K: Resource<Scope = k8s_openapi::NamespaceResourceScope>
+        + Clone
+        + serde::de::DeserializeOwned
+        + Debug,
+    K::DynamicType: Default,
+    S: Conditions,
+{
+    let mut conditions = existing_status
+        .as_ref()
+        .and_then(|s| s.conditions().clone());
+    if upsert_condition(&mut conditions, condition.clone()) {
+        let api: Api<K> = Api::default_namespaced(client);
+        let patch = Patch::Apply(serde_json::json!({
+            "apiVersion": K::api_version(&Default::default()),
+            "kind": K::kind(&Default::default()),
+            "status": { "conditions": [condition] }
+        }));
+        api.patch_status(name, &PatchParams::apply(field_manager), &patch)
+            .await
+            .map_err(Into::<anyhow::Error>::into)?;
+        return Ok(true);
+    }
+    Ok(false)
 }

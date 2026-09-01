@@ -23,13 +23,13 @@ use std::{collections::BTreeMap, sync::Arc};
 
 use trusted_cluster_operator_lib::conditions::ATTESTATION_KEY_MACHINE_APPROVE;
 use trusted_cluster_operator_lib::endpoints::*;
-use trusted_cluster_operator_lib::{AttestationKey, AttestationKeyStatus, Machine, update_status};
+use trusted_cluster_operator_lib::{AttestationKey, Machine};
 
-use crate::conditions::attestation_key_approved_condition;
+use crate::conditions::{attestation_key_approved_condition, machine_ak_approved_condition};
 use crate::trustee;
 use operator::{
     ControllerError, KIND_LABEL_KEY, LONG_REQUEUE, OperatorContext, TLS_DIR,
-    controller_error_policy, create_or_info_if_exists, read_certificate, upsert_condition,
+    controller_error_policy, create_or_info_if_exists, patch_status_condition, read_certificate,
 };
 
 const INTERNAL_ATTESTATION_KEY_REGISTER_PORT: i32 = 8001;
@@ -180,6 +180,19 @@ async fn machine_reconcile(
             return Ok(LONG_REQUEUE);
         }
     }
+
+    let machine_name = machine.metadata.name.clone().unwrap_or_default();
+    let condition =
+        machine_ak_approved_condition(false, machine.metadata.generation, &machine.status);
+    patch_status_condition::<Machine, _>(
+        ctx.client.clone(),
+        &machine_name,
+        &machine.status,
+        condition,
+        "attestation-key-register",
+    )
+    .await?;
+
     Ok(LONG_REQUEUE)
 }
 
@@ -188,15 +201,21 @@ async fn approve_ak(ak: &AttestationKey, machine: &Machine, ctx: &OperatorContex
     let client = &ctx.client;
     let aks: Api<AttestationKey> = Api::default_namespaced(client.clone());
 
-    let generation = ak.metadata.generation;
-    let approve_reason = ATTESTATION_KEY_MACHINE_APPROVE;
-    let condition = attestation_key_approved_condition(approve_reason, generation, &ak.status);
-    let mut conditions = ak.status.as_ref().and_then(|s| s.conditions.clone());
-    let changed = upsert_condition(&mut conditions, condition);
+    let condition = attestation_key_approved_condition(
+        ATTESTATION_KEY_MACHINE_APPROVE,
+        ak.metadata.generation,
+        &ak.status,
+    );
 
-    if changed {
-        let status = AttestationKeyStatus { conditions };
-        update_status!(aks, &name, status)?;
+    if patch_status_condition::<AttestationKey, _>(
+        client.clone(),
+        &name,
+        &ak.status,
+        condition,
+        "attestation-key-register",
+    )
+    .await?
+    {
         info!("Approved attestation key {name}");
     }
 
@@ -254,6 +273,20 @@ async fn approve_ak(ak: &AttestationKey, machine: &Machine, ctx: &OperatorContex
 
         create_or_info_if_exists!(client.clone(), Secret, secret);
         info!("Created secret {secret_name} for attestation key {name} with finalizer");
+    }
+
+    let machine_condition =
+        machine_ak_approved_condition(true, machine.metadata.generation, &machine.status);
+    if patch_status_condition::<Machine, _>(
+        client.clone(),
+        &machine_name,
+        &machine.status,
+        machine_condition,
+        "attestation-key-register",
+    )
+    .await?
+    {
+        info!("Set AttestationKeyApproved condition on Machine {machine_name}");
     }
 
     Ok(())

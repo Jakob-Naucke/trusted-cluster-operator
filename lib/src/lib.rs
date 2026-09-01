@@ -66,6 +66,12 @@ impl Conditions for ApprovedImageStatus {
     }
 }
 
+impl Conditions for MachineStatus {
+    fn conditions(&self) -> &Option<Vec<Condition>> {
+        &self.conditions
+    }
+}
+
 pub fn transition_time<S: Conditions>(
     existing_status: &Option<S>,
     type_: &str,

@@ -23,6 +23,7 @@ use kube::{Api, Client, Resource};
 use log::info;
 use std::{collections::BTreeMap, sync::Arc};
 
+use crate::conditions::machine_key_provisioned_condition;
 use crate::trustee;
 use operator::*;
 use trusted_cluster_operator_lib::{Machine, endpoints::*};
@@ -134,11 +135,34 @@ async fn keygen_reconcile(
     finalizer(&machines, MACHINE_FINALIZER, machine, |ev| async move {
         match ev {
             Event::Apply(machine) => {
-                let id = &machine.spec.id.clone();
+                let id = machine.spec.id.clone();
+                let machine_name = machine.metadata.name.clone().unwrap_or_default();
+                let generation = machine.metadata.generation;
+                let existing_status = machine.status.clone();
                 async {
                     let owner_reference = generate_owner_reference(&Arc::unwrap_or_clone(machine))?;
-                    trustee::generate_secret(ctx.client.clone(), id, owner_reference).await?;
-                    trustee::send_secret(&ctx, id).await
+                    let provisioning_result = async {
+                        trustee::generate_secret(ctx.client.clone(), &id, owner_reference).await?;
+                        trustee::send_secret(&ctx, &id).await
+                    }
+                    .await;
+
+                    let provisioned = provisioning_result.is_ok();
+                    let condition = machine_key_provisioned_condition(
+                        provisioned,
+                        generation,
+                        &existing_status,
+                    );
+                    patch_status_condition::<Machine, _>(
+                        ctx.client.clone(),
+                        &machine_name,
+                        &existing_status,
+                        condition,
+                        "register-server",
+                    )
+                    .await?;
+                    provisioning_result?;
+                    Ok::<(), anyhow::Error>(())
                 }
                 .await
                 .map(|_| LONG_REQUEUE)

@@ -3,7 +3,9 @@
 // SPDX-License-Identifier: MIT
 
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
-use trusted_cluster_operator_lib::{AttestationKeyStatus, TrustedExecutionClusterStatus};
+use trusted_cluster_operator_lib::{
+    AttestationKeyStatus, MachineStatus, TrustedExecutionClusterStatus,
+};
 use trusted_cluster_operator_lib::{condition_status, conditions::*, transition_time};
 
 pub fn known_trustee_address_condition(
@@ -49,6 +51,60 @@ pub fn installed_condition(
             _ => "",
         }
         .to_string(),
+        last_transition_time: transition_time(existing_status, type_, &status),
+        status,
+        observed_generation: generation,
+    }
+}
+
+pub fn machine_key_provisioned_condition(
+    provisioned: bool,
+    generation: Option<i64>,
+    existing_status: &Option<MachineStatus>,
+) -> Condition {
+    let (reason, message) = match provisioned {
+        true => (
+            MACHINE_KEY_PROVISIONED_REASON,
+            "LUKS key generated and mounted in Trustee",
+        ),
+        false => (
+            MACHINE_KEY_NOT_PROVISIONED_REASON,
+            "Key provisioning failed, check operator logs for details",
+        ),
+    };
+    let type_ = MACHINE_KEY_PROVISIONED_CONDITION;
+    let status = condition_status(provisioned);
+    Condition {
+        type_: type_.to_string(),
+        reason: reason.to_string(),
+        message: message.to_string(),
+        last_transition_time: transition_time(existing_status, type_, &status),
+        status,
+        observed_generation: generation,
+    }
+}
+
+pub fn machine_ak_approved_condition(
+    approved: bool,
+    generation: Option<i64>,
+    existing_status: &Option<MachineStatus>,
+) -> Condition {
+    let (reason, message) = match approved {
+        true => (
+            MACHINE_AK_APPROVED_REASON,
+            "A matching attestation key was found and approved",
+        ),
+        false => (
+            MACHINE_AK_NOT_APPROVED_REASON,
+            "No matching attestation key found",
+        ),
+    };
+    let type_ = MACHINE_AK_APPROVED_CONDITION;
+    let status = condition_status(approved);
+    Condition {
+        type_: type_.to_string(),
+        reason: reason.to_string(),
+        message: message.to_string(),
         last_transition_time: transition_time(existing_status, type_, &status),
         status,
         observed_generation: generation,
