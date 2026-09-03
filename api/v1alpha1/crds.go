@@ -131,10 +131,16 @@ type TrustedExecutionClusterList struct {
 }
 
 // MachineSpec defines the desired state of Machine
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.providerID) || has(self.providerID)",message="providerID is required once set"
 type MachineSpec struct {
 	// Machine ID, typically a UUID
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="Value is immutable"
 	Id string `json:"id"`
+
+	// Provider ID of the machine in the underlying infrastructure
+	// +optional
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="providerID is immutable"
+	ProviderID *string `json:"providerID,omitempty"`
 }
 
 // MachineStatus defines the observed state of Machine.

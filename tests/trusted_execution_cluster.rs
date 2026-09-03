@@ -57,6 +57,7 @@ named_test!(
             },
             spec: trusted_cluster_operator_lib::MachineSpec {
                 id: machine_uuid.clone(),
+                provider_id: None,
             },
             status: None,
         };
@@ -198,6 +199,7 @@ async fn test_attestation_key_lifecycle() -> anyhow::Result<()> {
         },
         spec: trusted_cluster_operator_lib::MachineSpec {
             id: machine_uuid.clone(),
+            provider_id: None,
         },
         status: None,
     };
@@ -312,6 +314,7 @@ async fn test_luks_key_sync() -> anyhow::Result<()> {
         },
         spec: trusted_cluster_operator_lib::MachineSpec {
             id: machine1_uuid.clone(),
+            provider_id: None,
         },
         status: None,
     };
@@ -327,6 +330,7 @@ async fn test_luks_key_sync() -> anyhow::Result<()> {
         },
         spec: trusted_cluster_operator_lib::MachineSpec {
             id: machine2_uuid.clone(),
+            provider_id: None,
         },
         status: None,
     };
@@ -505,6 +509,7 @@ async fn test_attestation_key_sync() -> anyhow::Result<()> {
         },
         spec: trusted_cluster_operator_lib::MachineSpec {
             id: machine1_uuid.clone(),
+            provider_id: None,
         },
         status: None,
     };
@@ -520,6 +525,7 @@ async fn test_attestation_key_sync() -> anyhow::Result<()> {
         },
         spec: trusted_cluster_operator_lib::MachineSpec {
             id: machine2_uuid.clone(),
+            provider_id: None,
         },
         status: None,
     };

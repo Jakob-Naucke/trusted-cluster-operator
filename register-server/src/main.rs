@@ -246,6 +246,7 @@ async fn create_machine(
         },
         spec: MachineSpec {
             id: uuid.to_string(),
+            provider_id: None,
         },
         status: None,
     };
@@ -374,6 +375,7 @@ mod tests {
             },
             spec: MachineSpec {
                 id: "test".to_string(),
+                provider_id: None,
             },
             status: None,
         }
