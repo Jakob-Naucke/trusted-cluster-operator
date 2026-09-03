@@ -15,5 +15,4 @@ import (
 	_ "github.com/mikefarah/yq/v4"
 	_ "github.com/projectcalico/api/pkg/lib/numorstring"
 	_ "sigs.k8s.io/controller-tools/cmd/controller-gen"
-	_ "sigs.k8s.io/kind"
 )
