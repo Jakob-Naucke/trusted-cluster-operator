@@ -27,6 +27,7 @@ var (
 
 // +kubebuilder:rbac:groups="",resources=configmaps;services;secrets,verbs=create;get;list;patch;watch
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list
+// +kubebuilder:rbac:groups="",resources=nodes,verbs=get;list;patch;update;watch
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=create;delete;get;list;patch;update;watch
 // +kubebuilder:rbac:groups=batch,resources=jobs,verbs=create;delete;get;list;patch;update;watch
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=networkpolicies,verbs=create;delete;patch;update
