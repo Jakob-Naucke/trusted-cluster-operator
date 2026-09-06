@@ -6,7 +6,11 @@
 use anyhow::Context;
 use axum::extract::State;
 use axum::response::{IntoResponse, Json};
-use axum::{http::StatusCode, routing::get, Router};
+use axum::{
+    http::StatusCode,
+    routing::{get, put},
+    Router,
+};
 use axum_server::tls_openssl::OpenSSLConfig;
 use clap::Parser;
 use clevis_pin_trustee_lib::{
@@ -19,6 +23,7 @@ use ignition_config::v3_6::{
 use k8s_openapi::api::core::v1::ObjectReference;
 use k8s_openapi::api::core::v1::Secret;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{ObjectMeta, OwnerReference};
+use kube::api::{Patch, PatchParams};
 use kube::runtime::events::{EventType, Recorder, Reporter};
 use kube::{Api, Client, Resource};
 use log::{error, info};
@@ -232,6 +237,46 @@ async fn register_handler(State(state): State<AppState>) -> impl IntoResponse {
     (StatusCode::OK, Json(ignition_json))
 }
 
+/// Payload a node reports to /bind: its UUID and the providerID it discovered.
+#[derive(serde::Deserialize)]
+struct BindRequest {
+    uuid: String,
+    #[serde(rename = "providerID")]
+    provider_id: String,
+}
+
+/// Patch the Machine named after the reported UUID with its providerID.
+async fn bind_handler(
+    State(AppState { client, .. }): State<AppState>,
+    Json(req): Json<BindRequest>,
+) -> impl IntoResponse {
+    let machine_name = format!("machine-{}", req.uuid);
+    info!(
+        "Received bind request for {machine_name}: providerID={}",
+        req.provider_id
+    );
+
+    let machines: Api<Machine> = Api::default_namespaced(client);
+    let patch = serde_json::json!({ "spec": { "providerID": req.provider_id } });
+    match machines
+        .patch(
+            &machine_name,
+            &PatchParams::default(),
+            &Patch::Merge(&patch),
+        )
+        .await
+    {
+        Ok(_) => {
+            info!("Patched {machine_name} with its providerID");
+            StatusCode::OK
+        }
+        Err(e) => {
+            error!("Failed to patch {machine_name}: {e:?}");
+            StatusCode::INTERNAL_SERVER_ERROR
+        }
+    }
+}
+
 async fn create_machine(
     client: Client,
     uuid: &str,
@@ -273,8 +318,10 @@ async fn main() {
         recorder: Recorder::new(client.clone(), reporter),
         client,
     };
+    let bind_endpoint = format!("/{BIND_RESOURCE}");
     let app = Router::new()
         .route(&endpoint, get(register_handler))
+        .route(&bind_endpoint, put(bind_handler))
         .with_state(state);
     let addr = SocketAddr::from(([0, 0, 0, 0], args.port));
     let service = app.into_make_service();

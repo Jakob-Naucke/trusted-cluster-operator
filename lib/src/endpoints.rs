@@ -10,6 +10,7 @@ pub const REGISTER_SERVER_SERVICE: &str = "register-server";
 pub const REGISTER_SERVER_DEPLOYMENT: &str = "register-server";
 pub const REGISTER_SERVER_PORT: i32 = 8000;
 pub const REGISTER_SERVER_APP_LABEL: &str = "register-server";
+pub const BIND_RESOURCE: &str = "bind";
 pub const ATTESTATION_KEY_REGISTER_SERVICE: &str = "attestation-key-register";
 pub const ATTESTATION_KEY_REGISTER_DEPLOYMENT: &str = "attestation-key-register";
 pub const ATTESTATION_KEY_REGISTER_PORT: i32 = 8001;
