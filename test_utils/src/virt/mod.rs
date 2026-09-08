@@ -190,7 +190,7 @@ pub trait NodeBackend: Send + Sync {
         Ok(dev.name.clone())
     }
 
-    async fn get_root_key(&self, client: Client, namespace: &str) -> Result<Option<Vec<u8>>> {
+    async fn get_root_key(&self, client: Client, namespace: &str) -> Result<Vec<u8>> {
         // Extract the UUID from the Clevis token in the LUKS header
         let root_volume = self.get_root_volume().await?;
         let uuid_cmd = format!(
@@ -208,15 +208,12 @@ pub trait NodeBackend: Send + Sync {
         let secrets: Api<Secret> = Api::namespaced(client, namespace);
         let ctx = format!("Failed to get secret for UUID {uuid}");
         let secret = secrets.get(uuid).await.context(ctx)?;
-        Ok(Some(secret.data.unwrap().get("root").unwrap().0.clone()))
+        Ok(secret.data.unwrap().get("root").unwrap().0.clone())
     }
 
-    async fn verify_encrypted_root(&self, encryption_key: Option<&[u8]>) -> Result<()> {
+    async fn verify_encrypted_root(&self, encryption_key: &[u8]) -> Result<()> {
         let dev = self.get_root_volume().await?;
-        if encryption_key.is_none() {
-            return Ok(())
-        }
-        let key = serde_json::from_slice::<ClevisKey>(encryption_key.unwrap())?.key;
+        let key = serde_json::from_slice::<ClevisKey>(encryption_key)?.key;
         let cmd = format!(
             "jose jwe dec \
                -k <(jose fmt -j '{{}}' -q oct -s kty -Uq $(printf {key} | jose b64 enc -I-) -s k -Uo-) \

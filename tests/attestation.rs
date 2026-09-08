@@ -17,19 +17,15 @@ use trusted_cluster_operator_test_utils::virt::{self, VmBackend};
 use trusted_cluster_operator_test_utils::{Poller, wait_for_event};
 
 const ENCRYPTED_ROOT_CTX: &str = "should have an encrypted root device (attestation failed)";
-const ENCRYPTED_ROOT_WARN: &str = "Backend reports that Machine IDs cannot be correlated to IP \
-                                   addresses with this VIRT_PROVIDER (e.g. because of NAT). Disk \
-                                   encryption test will only verify that the disk is encrypted, \
-                                   not that it is encrypted with the expected key.";
 
 struct SingleAttestationContext {
-    root_key: Option<Vec<u8>>,
+    root_key: Vec<u8>,
     backend: Box<dyn VmBackend>,
 }
 
 impl SingleAttestationContext {
     async fn verify_encrypted_root(&self) -> Result<()> {
-        self.backend.verify_encrypted_root(self.root_key.as_deref()).await
+        self.backend.verify_encrypted_root(&self.root_key).await
     }
 
     async fn cleanup(self) -> Result<()> {
@@ -56,9 +52,6 @@ impl SingleAttestationContext {
         test_ctx.info("SSH access is ready");
 
         let root_key = backend.get_root_key(client.clone(), namespace).await?;
-        if root_key.is_none() {
-            test_ctx.warn(ENCRYPTED_ROOT_WARN);
-        }
         Ok(Self { root_key, backend })
     }
 }
@@ -126,13 +119,10 @@ async fn test_parallel_vm_attestation() -> anyhow::Result<()> {
     // Verify attestation on both VMs in parallel
     let root_key1 = backend1.get_root_key(client.clone(), namespace).await?;
     let root_key2 = backend2.get_root_key(client.clone(), namespace).await?;
-    if root_key1.is_none() || root_key2.is_none() {
-        test_ctx.warn(ENCRYPTED_ROOT_WARN);
-    }
     test_ctx.info("Verifying encrypted root on both VMs");
     let (vm1_encrypted, vm2_encrypted) = tokio::join!(
-        backend1.verify_encrypted_root(root_key1.as_deref()),
-        backend2.verify_encrypted_root(root_key2.as_deref())
+        backend1.verify_encrypted_root(&root_key1),
+        backend2.verify_encrypted_root(&root_key2)
     );
     vm1_encrypted.context(format!("VM1 {ENCRYPTED_ROOT_CTX}"))?;
     vm2_encrypted.context(format!("VM2 {ENCRYPTED_ROOT_CTX}"))?;
