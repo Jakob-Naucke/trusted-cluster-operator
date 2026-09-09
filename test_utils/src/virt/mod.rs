@@ -176,7 +176,7 @@ pub trait NodeBackend: Send + Sync {
 
     async fn get_root_key(&self, client: Client, namespace: &str) -> Result<Option<Vec<u8>>> {
         // Extract the UUID from the Clevis token in the LUKS header
-        let uuid_cmd = "sudo cryptsetup token export --token-id 0 /dev/vda4 | jq -r \".jwe.protected\" | base64 -d | jq -r \".clevis.path\" | cut -d/ -f2";
+        let uuid_cmd = "sudo cryptsetup token export --token-id 0 /dev/vda4 | jq -r \".jwe.protected\" | jose b64 dec -i- | jq -r \".clevis.path\" | cut -d/ -f2";
         let ctx = "Failed to extract UUID from VM";
         let uuid_output = self.ssh_exec(uuid_cmd).await.context(ctx)?;
         let uuid = uuid_output.trim();
