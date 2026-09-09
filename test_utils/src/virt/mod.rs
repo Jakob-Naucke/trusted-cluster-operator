@@ -212,37 +212,19 @@ pub trait NodeBackend: Send + Sync {
     }
 
     async fn verify_encrypted_root(&self, encryption_key: Option<&[u8]>) -> Result<bool> {
-        let output = self.ssh_exec("lsblk -o NAME,TYPE -J").await?;
-        let lsblk_output: serde_json::Value = serde_json::from_str(&output)?;
-
-        let get_children = |val: &serde_json::Value| {
-            let children = val.get("children").and_then(|v| v.as_array());
-            children.map(|v| v.to_vec()).unwrap_or_default()
-        };
-        let devices = lsblk_output.get("blockdevices").and_then(|v| v.as_array());
-        for child in devices.into_iter().flatten().flat_map(get_children) {
-            if get_children(&child).iter().any(|nested| {
-                let name = nested.get("name").and_then(|n| n.as_str());
-                let dev_type = nested.get("type").and_then(|t| t.as_str());
-                name == Some("root") && dev_type == Some("crypt")
-            }) {
-                if encryption_key.is_none() {
-                    return Ok(true);
-                }
-                let jwk: ClevisKey = serde_json::from_slice(encryption_key.unwrap())?;
-                let key = jwk.key;
-                let dev = child.get("name").and_then(|n| n.as_str()).unwrap();
-                let cmd = format!(
-                    "jose jwe dec \
-                     -k <(jose fmt -j '{{}}' -q oct -s kty -Uq $(printf {key} | jose b64 enc -I-) -s k -Uo-) \
-                     -i <(sudo cryptsetup token export --token-id 0 /dev/{dev} | jose fmt -j- -Og jwe -o-) \
-                     | sudo cryptsetup luksOpen --test-passphrase --key-file=- /dev/{dev}",
-                );
-                return self.ssh_exec(&cmd).await.map(|_| true);
-            }
+        let dev = self.get_root_volume().await?;
+        if encryption_key.is_none() {
+            return Ok(true)
         }
-
-        Ok(false)
+        let key = serde_json::from_slice::<ClevisKey>(encryption_key.unwrap())?.key;
+        let cmd = format!(
+            "jose jwe dec \
+               -k <(jose fmt -j '{{}}' -q oct -s kty -Uq $(printf {key} | jose b64 enc -I-) -s k -Uo-) \
+               -i <(sudo cryptsetup token export --token-id 0 /dev/{dev} | jose fmt -j- -Og jwe -o-) \
+               | sudo cryptsetup luksOpen --test-passphrase --key-file=- /dev/{dev}",
+        );
+        self.ssh_exec(&cmd).await?;
+        Ok(true)
     }
 }
 
