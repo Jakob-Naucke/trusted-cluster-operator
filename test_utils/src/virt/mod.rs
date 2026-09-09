@@ -135,8 +135,8 @@ pub async fn generate_ignition(config: &VmConfig) -> Result<serde_json::Value> {
     Ok(ignition_json)
 }
 
-pub async fn sh_exec(command: &str) -> Result<String> {
-    let output = Command::new("sh").arg("-c").arg(command).output().await?;
+pub async fn sh_exec(command: &mut Command) -> Result<String> {
+    let output = command.output().await?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(anyhow!("ssh command failed: {stderr}"));

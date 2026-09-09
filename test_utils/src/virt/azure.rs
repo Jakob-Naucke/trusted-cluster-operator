@@ -66,10 +66,12 @@ impl NodeBackend for AzureBackend {
         let result = self.az(&args).await?;
 
         let public_ip = result["ipAddress"].as_str().unwrap();
-        sh_exec(&format!(
-            "ssh -i {} -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null core@{public_ip} '{command}'",
-            self.config.ssh_private_key.display()
-        )).await
+        let mut cmd = Command::new("ssh");
+        cmd.args(["-i", &self.config.ssh_private_key.display().to_string()]);
+        cmd.args(["-o", "IdentitiesOnly=yes", "-o", "StrictHostKeyChecking=no"]);
+        cmd.args(["-o", "UserKnownHostsFile=/dev/null"]);
+        cmd.args([&format!("core@{public_ip}"), command]);
+        sh_exec(&mut cmd).await
     }
 
     async fn get_root_key(&self, _: Client, _: &str) -> Result<Option<Vec<u8>>> {

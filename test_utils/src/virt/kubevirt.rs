@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use k8s_openapi::{api::core::v1::Secret, apimachinery::pkg::util::intstr::IntOrString};
 use kube::{Api, api::ObjectMeta, runtime::wait::await_condition};
 use std::{collections::BTreeMap, time::Duration};
-use tokio::time::timeout;
+use tokio::{process::Command, time::timeout};
 use trusted_cluster_operator_lib::virtualmachines::*;
 
 use super::{NodeBackend, VmBackend, VmConfig, generate_ignition, sh_exec};
@@ -18,14 +18,14 @@ pub struct KubevirtBackend(pub VmConfig);
 #[async_trait::async_trait]
 impl NodeBackend for KubevirtBackend {
     async fn ssh_exec(&self, command: &str) -> Result<String> {
-        let full_cmd = format!(
-            "virtctl ssh -i {} core@vmi/{}/{} -t '-o IdentitiesOnly=yes' -t '-o StrictHostKeyChecking=no' --known-hosts /dev/null -c '{command}'",
-            self.0.ssh_private_key.display(),
-            self.0.vm_name,
-            self.0.namespace,
-        );
-
-        sh_exec(&full_cmd).await
+        let mut cmd = Command::new("virtctl");
+        cmd.args(["ssh", "-i", &self.0.ssh_private_key.display().to_string()]);
+        cmd.arg(format!("core@vmi/{}/{}", self.0.vm_name, self.0.namespace));
+        cmd.args(["-t", "-o IdentitiesOnly=yes"]);
+        cmd.args(["-t", "-o StrictHostKeyChecking=no"]);
+        cmd.args(["--known-hosts", "/dev/null"]);
+        cmd.args(["-c", command]);
+        sh_exec(&mut cmd).await
     }
 }
 
