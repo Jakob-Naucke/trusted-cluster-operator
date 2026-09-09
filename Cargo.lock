@@ -678,7 +678,7 @@ checksum = "3a822ea5bc7590f9d40f1ba12c0dc3c2760f3482c6984db1573ad11031420831"
 [[package]]
 name = "clevis-pin-trustee-lib"
 version = "0.1.0"
-source = "git+https://github.com/latchset/clevis-pin-trustee#36e24c4e84dc818ed2f41f5b36d25d8de7f76d27"
+source = "git+https://github.com/latchset/clevis-pin-trustee#889230066a1826fab8d4d31860e1f7c61d070667"
 dependencies = [
  "serde",
 ]
@@ -4739,9 +4739,9 @@ dependencies = [
 
 [[package]]
 name = "toml"
-version = "1.1.4+spec-1.1.0"
+version = "1.1.5+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3aace63f4bbcdfc2c965b059de67119c89c4017a70d633be6c104910f67056f5"
+checksum = "12c0ba9680044b4ce98d391a62094047eada0d64860b80166c39f4a6b5640785"
 dependencies = [
  "indexmap 2.14.0",
  "serde_core",
@@ -4898,6 +4898,7 @@ dependencies = [
  "k8s-openapi 0.28.0",
  "kopium",
  "kube 4.2.0",
+ "log",
  "serde",
  "serde_json",
  "tokio",
