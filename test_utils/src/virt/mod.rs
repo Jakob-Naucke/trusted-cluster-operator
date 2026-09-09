@@ -211,10 +211,10 @@ pub trait NodeBackend: Send + Sync {
         Ok(Some(secret.data.unwrap().get("root").unwrap().0.clone()))
     }
 
-    async fn verify_encrypted_root(&self, encryption_key: Option<&[u8]>) -> Result<bool> {
+    async fn verify_encrypted_root(&self, encryption_key: Option<&[u8]>) -> Result<()> {
         let dev = self.get_root_volume().await?;
         if encryption_key.is_none() {
-            return Ok(true)
+            return Ok(())
         }
         let key = serde_json::from_slice::<ClevisKey>(encryption_key.unwrap())?.key;
         let cmd = format!(
@@ -224,7 +224,7 @@ pub trait NodeBackend: Send + Sync {
                | sudo cryptsetup luksOpen --test-passphrase --key-file=- /dev/{dev}",
         );
         self.ssh_exec(&cmd).await?;
-        Ok(true)
+        Ok(())
     }
 }
 
