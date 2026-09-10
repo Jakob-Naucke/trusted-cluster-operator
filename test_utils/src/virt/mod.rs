@@ -7,6 +7,7 @@ pub mod azure;
 pub mod kubevirt;
 
 use anyhow::{Context, Result, anyhow};
+use blockdev::{BlockDevice, BlockDevices, DeviceType};
 use clevis_pin_trustee_lib::Key as ClevisKey;
 use k8s_openapi::api::core::v1::Secret;
 use kube::{Api, Client};
@@ -135,8 +136,8 @@ pub async fn generate_ignition(config: &VmConfig) -> Result<serde_json::Value> {
     Ok(ignition_json)
 }
 
-pub async fn sh_exec(command: &str) -> Result<String> {
-    let output = Command::new("sh").arg("-c").arg(command).output().await?;
+pub async fn sh_exec(command: &mut Command) -> Result<String> {
+    let output = command.output().await?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(anyhow!("ssh command failed: {stderr}"));
@@ -174,11 +175,29 @@ pub async fn create_backend(
 pub trait NodeBackend: Send + Sync {
     async fn ssh_exec(&self, command: &str) -> Result<String>;
 
-    async fn get_root_key(&self, client: Client, namespace: &str) -> Result<Option<Vec<u8>>> {
+    async fn get_root_volume(&self) -> Result<String> {
+        let lsblk_cmd = "lsblk -J";
+        let ctx = "Failed to get block devices from VM";
+        let blk_json = self.ssh_exec(lsblk_cmd).await.context(ctx)?;
+        let blkdevs: BlockDevices = serde_json::from_str(&blk_json)?;
+        let ctx = "No block device's child mounted at /sysroot";
+        let is_root = |m: &Option<String>| m.as_deref() == Some("/sysroot");
+        let has_root = |d: &BlockDevice| {
+            d.mountpoints.iter().any(is_root) && d.device_type == DeviceType::Crypt
+        };
+        let has_root_child = |d: &&BlockDevice| d.children.iter().flatten().any(has_root);
+        let dev = blkdevs.iter_all().find(has_root_child).context(ctx)?;
+        Ok(dev.name.clone())
+    }
+
+    async fn get_root_key(&self, client: Client, namespace: &str) -> Result<Vec<u8>> {
         // Extract the UUID from the Clevis token in the LUKS header
-        let uuid_cmd = "sudo cryptsetup token export --token-id 0 /dev/vda4 | jq -r \".jwe.protected\" | base64 -d | jq -r \".clevis.path\" | cut -d/ -f2";
+        let root_volume = self.get_root_volume().await?;
+        let uuid_cmd = format!(
+            "sudo cryptsetup token export --token-id 0 /dev/{root_volume} | jq -r \".jwe.protected\" | jose b64 dec -i- | jq -r \".clevis.path\" | cut -d/ -f2"
+        );
         let ctx = "Failed to extract UUID from VM";
-        let uuid_output = self.ssh_exec(uuid_cmd).await.context(ctx)?;
+        let uuid_output = self.ssh_exec(&uuid_cmd).await.context(ctx)?;
         let uuid = uuid_output.trim();
 
         if uuid.is_empty() {
@@ -189,41 +208,20 @@ pub trait NodeBackend: Send + Sync {
         let secrets: Api<Secret> = Api::namespaced(client, namespace);
         let ctx = format!("Failed to get secret for UUID {uuid}");
         let secret = secrets.get(uuid).await.context(ctx)?;
-        Ok(Some(secret.data.unwrap().get("root").unwrap().0.clone()))
+        Ok(secret.data.unwrap().get("root").unwrap().0.clone())
     }
 
-    async fn verify_encrypted_root(&self, encryption_key: Option<&[u8]>) -> Result<bool> {
-        let output = self.ssh_exec("lsblk -o NAME,TYPE -J").await?;
-        let lsblk_output: serde_json::Value = serde_json::from_str(&output)?;
-
-        let get_children = |val: &serde_json::Value| {
-            let children = val.get("children").and_then(|v| v.as_array());
-            children.map(|v| v.to_vec()).unwrap_or_default()
-        };
-        let devices = lsblk_output.get("blockdevices").and_then(|v| v.as_array());
-        for child in devices.into_iter().flatten().flat_map(get_children) {
-            if get_children(&child).iter().any(|nested| {
-                let name = nested.get("name").and_then(|n| n.as_str());
-                let dev_type = nested.get("type").and_then(|t| t.as_str());
-                name == Some("root") && dev_type == Some("crypt")
-            }) {
-                if encryption_key.is_none() {
-                    return Ok(true);
-                }
-                let jwk: ClevisKey = serde_json::from_slice(encryption_key.unwrap())?;
-                let key = jwk.key;
-                let dev = child.get("name").and_then(|n| n.as_str()).unwrap();
-                let cmd = format!(
-                    "jose jwe dec \
-                     -k <(jose fmt -j '{{}}' -q oct -s kty -Uq $(printf {key} | jose b64 enc -I-) -s k -Uo-) \
-                     -i <(sudo cryptsetup token export --token-id 0 /dev/{dev} | jose fmt -j- -Og jwe -o-) \
-                     | sudo cryptsetup luksOpen --test-passphrase --key-file=- /dev/{dev}",
-                );
-                return self.ssh_exec(&cmd).await.map(|_| true);
-            }
-        }
-
-        Ok(false)
+    async fn verify_encrypted_root(&self, encryption_key: &[u8]) -> Result<()> {
+        let dev = self.get_root_volume().await?;
+        let key = serde_json::from_slice::<ClevisKey>(encryption_key)?.key;
+        let cmd = format!(
+            "jose jwe dec \
+               -k <(jose fmt -j '{{}}' -q oct -s kty -Uq $(printf {key} | jose b64 enc -I-) -s k -Uo-) \
+               -i <(sudo cryptsetup token export --token-id 0 /dev/{dev} | jose fmt -j- -Og jwe -o-) \
+               | sudo cryptsetup luksOpen --test-passphrase --key-file=- /dev/{dev}",
+        );
+        self.ssh_exec(&cmd).await?;
+        Ok(())
     }
 }
 

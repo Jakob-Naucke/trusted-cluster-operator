@@ -15,7 +15,7 @@ use k8s_openapi::api::core::v1::{
 use k8s_openapi::api::events::v1::Event;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
 use kube::api::{DeleteParams, ListParams, ObjectMeta, Patch};
-use kube::runtime::wait::await_condition;
+use kube::runtime::wait::{await_condition, conditions::is_created};
 use kube::{Api, Client};
 use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
 use serde_json::json;
@@ -1158,8 +1158,7 @@ where
     K: kube::Resource<DynamicType = ()> + Clone + std::fmt::Debug + Send + 'static,
     K: k8s_openapi::serde::de::DeserializeOwned,
 {
-    let created = |r: Option<&K>| r.is_some();
-    let done = await_condition(api.clone(), resource_name, created);
+    let done = await_condition(api.clone(), resource_name, is_created());
     let type_ = std::any::type_name::<K>();
     let ctx = format!("waiting {timeout_secs} for {type_} '{resource_name}' creation");
     let duration = Duration::from_secs(timeout_secs);

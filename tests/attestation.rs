@@ -7,7 +7,7 @@ use trusted_cluster_operator_test_utils::*;
 
 cfg_if::cfg_if! {
 if #[cfg(feature = "virtualization")] {
-use anyhow::Result;
+use anyhow::{Context, Result};
 use k8s_openapi::api::apps::v1::Deployment;
 use kube::Api;
 use std::time::Duration;
@@ -16,20 +16,16 @@ use trusted_cluster_operator_test_utils::constants::APPROVED_IMAGE_NAME;
 use trusted_cluster_operator_test_utils::virt::{self, VmBackend};
 use trusted_cluster_operator_test_utils::{Poller, wait_for_event};
 
-const ENCRYPTED_ROOT_ASSERT: &str = "should have an encrypted root device (attestation failed)";
-const ENCRYPTED_ROOT_WARN: &str = "Backend reports that Machine IDs cannot be correlated to IP \
-                                   addresses with this VIRT_PROVIDER (e.g. because of NAT). Disk \
-                                   encryption test will only verify that the disk is encrypted, \
-                                   not that it is encrypted with the expected key.";
+const ENCRYPTED_ROOT_CTX: &str = "should have an encrypted root device (attestation failed)";
 
 struct SingleAttestationContext {
-    root_key: Option<Vec<u8>>,
+    root_key: Vec<u8>,
     backend: Box<dyn VmBackend>,
 }
 
 impl SingleAttestationContext {
-    async fn verify_encrypted_root(&self) -> Result<bool> {
-        self.backend.verify_encrypted_root(self.root_key.as_deref()).await
+    async fn verify_encrypted_root(&self) -> Result<()> {
+        self.backend.verify_encrypted_root(&self.root_key).await
     }
 
     async fn cleanup(self) -> Result<()> {
@@ -56,9 +52,6 @@ impl SingleAttestationContext {
         test_ctx.info("SSH access is ready");
 
         let root_key = backend.get_root_key(client.clone(), namespace).await?;
-        if root_key.is_none() {
-            test_ctx.warn(ENCRYPTED_ROOT_WARN);
-        }
         Ok(Self { root_key, backend })
     }
 }
@@ -73,9 +66,9 @@ async fn test_attestation() -> anyhow::Result<()> {
     let att_ctx = SingleAttestationContext::new(vm_name, &test_ctx).await?;
 
     test_ctx.info("Verifying encrypted root device");
-    let has_encrypted_root = att_ctx.verify_encrypted_root().await?;
+    let ctx = format!("VM {ENCRYPTED_ROOT_CTX}");
+    att_ctx.verify_encrypted_root().await.context(ctx)?;
 
-    assert!(has_encrypted_root, "VM {ENCRYPTED_ROOT_ASSERT}");
     test_ctx.info("Attestation successful: encrypted root device verified");
     att_ctx.cleanup().await?;
     test_ctx.cleanup().await?;
@@ -126,19 +119,13 @@ async fn test_parallel_vm_attestation() -> anyhow::Result<()> {
     // Verify attestation on both VMs in parallel
     let root_key1 = backend1.get_root_key(client.clone(), namespace).await?;
     let root_key2 = backend2.get_root_key(client.clone(), namespace).await?;
-    if root_key1.is_none() || root_key2.is_none() {
-        test_ctx.warn(ENCRYPTED_ROOT_WARN);
-    }
     test_ctx.info("Verifying encrypted root on both VMs");
     let (vm1_encrypted, vm2_encrypted) = tokio::join!(
-        backend1.verify_encrypted_root(root_key1.as_deref()),
-        backend2.verify_encrypted_root(root_key2.as_deref())
+        backend1.verify_encrypted_root(&root_key1),
+        backend2.verify_encrypted_root(&root_key2)
     );
-    let vm1_has_encrypted_root = vm1_encrypted?;
-    let vm2_has_encrypted_root = vm2_encrypted?;
-
-    assert!(vm1_has_encrypted_root, "VM1 {ENCRYPTED_ROOT_ASSERT}");
-    assert!(vm2_has_encrypted_root, "VM2 {ENCRYPTED_ROOT_ASSERT}");
+    vm1_encrypted.context(format!("VM1 {ENCRYPTED_ROOT_CTX}"))?;
+    vm2_encrypted.context(format!("VM2 {ENCRYPTED_ROOT_CTX}"))?;
 
     test_ctx.info("Both VMs successfully attested with encrypted root devices");
     backend1.cleanup().await?;
@@ -156,11 +143,8 @@ async fn test_vm_reboot_attestation() -> anyhow::Result<()> {
     let att_ctx = SingleAttestationContext::new(vm_name, &test_ctx).await?;
 
     test_ctx.info("Verifying initial encrypted root device");
-    let has_encrypted_root = att_ctx.verify_encrypted_root().await?;
-    assert!(
-        has_encrypted_root,
-        "VM should have encrypted root device on initial boot"
-    );
+    let ctx = "VM should have encrypted root device on initial boot";
+    att_ctx.verify_encrypted_root().await.context(ctx)?;
     test_ctx.info("Initial boot: attestation successful");
 
     // Perform multiple reboots
@@ -176,11 +160,8 @@ async fn test_vm_reboot_attestation() -> anyhow::Result<()> {
 
         // Verify encrypted root is still present after reboot
         test_ctx.info(format!("Verifying encrypted root after reboot {i}"));
-        let has_encrypted_root = att_ctx.verify_encrypted_root().await?;
-        assert!(
-            has_encrypted_root,
-            "VM should have encrypted root device after reboot {i}"
-        );
+        let ctx = format!("VM should have encrypted root device after reboot {i}");
+        att_ctx.verify_encrypted_root().await.context(ctx)?;
         test_ctx.info(format!("Reboot {i}: attestation successful"));
     }
 
@@ -272,8 +253,8 @@ async fn test_attestation_events() -> anyhow::Result<()> {
     let att_ctx = SingleAttestationContext::new(vm_name, &test_ctx).await?;
 
     test_ctx.info("Verifying encrypted root device");
-    let has_encrypted_root = att_ctx.verify_encrypted_root().await?;
-    assert!(has_encrypted_root, "VM should have an encrypted root device");
+    let ctx = format!("VM {ENCRYPTED_ROOT_CTX}");
+    att_ctx.verify_encrypted_root().await.context(ctx)?;
     test_ctx.info("Attestation successful, verifying Kubernetes events");
 
     let tecs: Api<TrustedExecutionCluster> = Api::namespaced(client.clone(), namespace);

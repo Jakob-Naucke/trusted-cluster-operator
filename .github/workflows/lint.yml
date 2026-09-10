@@ -53,6 +53,8 @@ jobs:
         run: if [ -n "$(gofmt -l .)" ]; then exit 1; fi
       - name: "go vet"
         run: go vet ./...
+      - name: "Ensure clean Cargo.lock"
+        run: sh -c '[ -z "$(git diff)" ]'
       - name: "Ensure Rust & Go conditions definitions use same strings"
         run: cargo test --test equal_conditions
       - name: "Ensure no disallowed crypto crates are shipped"

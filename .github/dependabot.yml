@@ -50,6 +50,10 @@ updates:
       - dependency-name: "rand_core"
         # Block newer versions of rand_core, incompatible
         versions: [">=0.7"]
+      - dependency-name: "blockdev"
+        # Newer versions do not parse lsblk -J output correctly, see
+        # https://github.com/wiggels/blockdev/pull/4#issuecomment-5572211474
+        versions: [">=0.5"]
       - dependency-name: "kopium"
         # Block newer versions of kopium until we bump to k8s 1.36
         versions: [">=0.23.0"]
