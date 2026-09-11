@@ -4,19 +4,15 @@
 
 use crate::trustee;
 use compute_pcrs_lib::Pcr;
-use compute_pcrs_lib::tpmevents::{TPMEvent, TPMEventID};
+use k8s_openapi::api::core::v1::Secret;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::OwnerReference;
-use k8s_openapi::{
-    api::core::v1::{ConfigMap, Secret},
-    jiff::Timestamp,
-};
 use kube::api::ObjectMeta;
 use kube::runtime::reflector::{self, Lookup, Store};
 use kube::runtime::watcher;
 use std::collections::BTreeMap;
 use std::hash::Hash;
-use trusted_cluster_operator_lib::reference_values::{ImagePcr, ImagePcrs, PCR_CONFIG_FILE};
-use trusted_cluster_operator_lib::{Machine, MachineSpec};
+use trusted_cluster_operator_lib::reference_values::pcrs_to_status;
+use trusted_cluster_operator_lib::{ApprovedImageStatusPcrs, Machine, MachineSpec};
 
 /// Build a reflector [`Store`] pre-populated with `items`, for tests that
 /// exercise code reading from an `OperatorContext` store instead of the API.
@@ -34,47 +30,133 @@ where
     store
 }
 
-pub const DUMMY_PCR_4_VALUE: &str =
-    "3f263b96ccbc33bb53d808771f9ab1e02d4dec8854f9530f749cde853a723273";
-pub const DUMMY_PCR_7_VALUE: &str =
-    "e58ada1ba75f2e4722b539824598ad5e10c55f2e4aeab2033f3b0a8ee3f3eca6";
+pub mod dummy_static_events {
+    use compute_pcrs_lib::tpmevents::{TPMEvent, TPMEventID};
 
-pub fn dummy_pcrs() -> ImagePcrs {
-    ImagePcrs(BTreeMap::from([(
-        "cos".to_string(),
-        ImagePcr {
-            first_seen: Timestamp::now(),
-            pcrs: vec![
-                Pcr {
-                    id: 4,
-                    value: hex::decode(DUMMY_PCR_4_VALUE).unwrap(),
-                    events: vec![TPMEvent {
-                        name: "EV_EFI_ACTION".into(),
-                        pcr: 4,
-                        hash: hex::decode(
-                            "3d6772b4f84ed47595d72a2c4c5ffd15f5bb72c7507fe26f2aaee2c69d5633ba",
-                        )
-                        .unwrap(),
-                        id: TPMEventID::Pcr4EfiCall,
-                    }],
-                },
-                Pcr {
-                    id: 7,
-                    value: hex::decode(DUMMY_PCR_7_VALUE).unwrap(),
-                    events: vec![TPMEvent {
-                        name: "EV_EFI_VARIABLE_DRIVER_CONFIG".into(),
-                        pcr: 7,
-                        hash: hex::decode(
-                            "ccfc4bb32888a345bc8aeadaba552b627d99348c767681ab3141f5b01e40a40e",
-                        )
-                        .unwrap(),
-                        id: TPMEventID::Pcr7SecureBoot,
-                    }],
-                },
-            ],
-            reference: "".to_string(),
-        },
-    )]))
+    // Ideally the name should be something like EV_EFI_BOOT_SERVICES_APPLICATION for shium, grub and even vmlinuz, but for readability and simplicity, we use the name of the file.
+    // event id anyways uniquely identifies the event, so we are free to choose our own names.
+
+    // events for pcr 4
+    pub fn shim_aa() -> TPMEvent {
+        TPMEvent {
+            name: "shim".to_string(),
+            pcr: 4,
+            hash: vec![0xaa; 32],
+            id: TPMEventID::Pcr4Shim,
+        }
+    }
+    pub fn shim_11() -> TPMEvent {
+        TPMEvent {
+            name: "shim".to_string(),
+            pcr: 4,
+            hash: vec![0x11; 32],
+            id: TPMEventID::Pcr4Shim,
+        }
+    }
+    pub fn grub_22() -> TPMEvent {
+        TPMEvent {
+            name: "grub".to_string(),
+            pcr: 4,
+            hash: vec![0x22; 32],
+            id: TPMEventID::Pcr4Grub,
+        }
+    }
+    pub fn grub_bb() -> TPMEvent {
+        TPMEvent {
+            name: "grub".to_string(),
+            pcr: 4,
+            hash: vec![0xbb; 32],
+            id: TPMEventID::Pcr4Grub,
+        }
+    }
+    pub fn vmlinuz_cc() -> TPMEvent {
+        TPMEvent {
+            name: "vmlinuz".to_string(),
+            pcr: 4,
+            hash: vec![0xcc; 32],
+            id: TPMEventID::Pcr4Vmlinuz,
+        }
+    }
+    pub fn vmlinuz_33() -> TPMEvent {
+        TPMEvent {
+            name: "vmlinuz".to_string(),
+            pcr: 4,
+            hash: vec![0x33; 32],
+            id: TPMEventID::Pcr4Vmlinuz,
+        }
+    }
+
+    // events for pcr 7
+    pub fn secure_boot_dd() -> TPMEvent {
+        TPMEvent {
+            name: "secure_boot".to_string(),
+            pcr: 7,
+            hash: vec![0xdd; 32],
+            id: TPMEventID::Pcr7SecureBoot,
+        }
+    }
+    pub fn shimcert_ee() -> TPMEvent {
+        TPMEvent {
+            name: "shimcert".to_string(),
+            pcr: 7,
+            hash: vec![0xee; 32],
+            id: TPMEventID::Pcr7ShimCert,
+        }
+    }
+    pub fn secure_boot_44() -> TPMEvent {
+        TPMEvent {
+            name: "secure_boot".to_string(),
+            pcr: 7,
+            hash: vec![0x44; 32],
+            id: TPMEventID::Pcr7SecureBoot,
+        }
+    }
+
+    // events for pcr 14
+    pub fn mok_ff() -> TPMEvent {
+        TPMEvent {
+            name: "mokList".to_string(),
+            pcr: 14,
+            hash: vec![0xff; 32],
+            id: TPMEventID::Pcr14MokList,
+        }
+    }
+    pub fn mok_55() -> TPMEvent {
+        TPMEvent {
+            name: "mokList".to_string(),
+            pcr: 14,
+            hash: vec![0x55; 32],
+            id: TPMEventID::Pcr14MokList,
+        }
+    }
+}
+
+pub fn dummy_pcrs() -> Vec<Pcr> {
+    vec![
+        // Build the PCR values from the events instead of harcoding constants. Events are the source of truth.
+        Pcr::compile_from(&vec![
+            dummy_static_events::shim_aa(),
+            dummy_static_events::grub_bb(),
+            dummy_static_events::vmlinuz_cc(),
+        ]),
+        Pcr::compile_from(&vec![
+            dummy_static_events::secure_boot_dd(),
+            dummy_static_events::shimcert_ee(),
+        ]),
+        Pcr::compile_from(&vec![dummy_static_events::mok_ff()]),
+    ]
+}
+
+pub fn dummy_status_pcrs() -> Vec<ApprovedImageStatusPcrs> {
+    pcrs_to_status(&dummy_pcrs())
+}
+
+pub fn dummy_pcr_value(pcr_id: u64) -> String {
+    let pcrs = dummy_pcrs();
+    pcrs.iter()
+        .find(|p| p.id == pcr_id)
+        .map(|p| hex::encode(&p.value))
+        .unwrap()
 }
 
 pub fn dummy_trustee_auth() -> Secret {
@@ -92,27 +174,6 @@ pub fn dummy_trustee_auth() -> Secret {
     ]);
 
     Secret {
-        data: Some(data),
-        ..Default::default()
-    }
-}
-
-pub fn dummy_trustee_map() -> ConfigMap {
-    ConfigMap {
-        data: Some(BTreeMap::from([(
-            trustee::REFERENCE_VALUES_FILE.to_string(),
-            "[]".to_string(),
-        )])),
-        ..Default::default()
-    }
-}
-
-pub fn dummy_pcrs_map() -> ConfigMap {
-    let data = BTreeMap::from([(
-        PCR_CONFIG_FILE.to_string(),
-        serde_json::to_string(&dummy_pcrs()).unwrap(),
-    )]);
-    ConfigMap {
         data: Some(data),
         ..Default::default()
     }

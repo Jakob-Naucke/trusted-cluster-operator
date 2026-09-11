@@ -737,6 +737,7 @@ name = "compute-pcrs"
 version = "0.2.3"
 dependencies = [
  "anyhow",
+ "chrono",
  "clap",
  "compute-pcrs-lib",
  "k8s-openapi 0.28.0",
@@ -4905,6 +4906,7 @@ version = "0.2.3"
 dependencies = [
  "anyhow",
  "compute-pcrs-lib",
+ "hex",
  "http",
  "k8s-openapi 0.28.0",
  "kopium",
@@ -4912,6 +4914,7 @@ dependencies = [
  "log",
  "serde",
  "serde_json",
+ "strum 0.28.0",
  "tokio",
  "trusted-cluster-operator-test-utils",
 ]
@@ -4930,6 +4933,7 @@ dependencies = [
  "env_logger",
  "fs_extra",
  "glob",
+ "hex",
  "http",
  "ignition-config",
  "k8s-openapi 0.28.0",
