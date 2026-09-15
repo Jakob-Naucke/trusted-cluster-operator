@@ -157,21 +157,17 @@ pub async fn launch_rv_job_controller(ctx: Arc<OperatorContext>) {
     );
 }
 
-// Name job by sanitized image name, plus a hash to disambiguate
-// tags that differed only beyond the truncation limit
-fn get_job_name(boot_image: &str) -> Result<String> {
-    let rfc1035_boot_image = boot_image.replace(['.', ':', '/', '@', '_'], "-");
-    let boot_image_hash = hash(MessageDigest::sha1(), boot_image.as_bytes())?;
-    let mut boot_image_hash_str = hex::encode(boot_image_hash);
-    boot_image_hash_str.truncate(10);
-    let job_name = format!("{PCR_COMMAND_NAME}-{boot_image_hash_str}-{rfc1035_boot_image}");
-    let trimmed: String = job_name.chars().take(63).collect();
-    let trimmed = trimmed.trim_end_matches('-').to_string();
-    Ok(trimmed)
+/// Name resource by uniquified RFC1035 name with a prefix
+pub fn rfc1035(name: &str, prefix: &str) -> Result<String> {
+    let replaced = name.replace(['.', ':', '/', '@', '_'], "-");
+    let hash = hash(MessageDigest::sha1(), name.as_bytes())?;
+    let hashed = hex::encode(hash)[..10].to_string();
+    let formatted = format!("{prefix}-{hashed}-{replaced}");
+    Ok(formatted[..63].trim_end_matches('-').to_string())
 }
 
 async fn compute_fresh_pcrs(client: Client, image: &ApprovedImage) -> anyhow::Result<()> {
-    let job_name = get_job_name(&image.spec.image)?;
+    let job_name = rfc1035(&image.spec.image, PCR_COMMAND_NAME)?;
     let env = "RELATED_IMAGE_COMPUTE_PCRS";
     let default_image =
         format!("quay.io/trusted-execution-clusters/compute-pcrs:{COMPONENT_VERSION}");
@@ -583,14 +579,14 @@ mod tests {
     }
 
     #[test]
-    fn test_get_job_name_trailing_dash() {
-        let name = get_job_name("quay.io/some_ref:some-tag-").unwrap();
+    fn test_rfc1035_trailing_dash() {
+        let name = rfc1035("quay.io/some_ref:some-tag-", PCR_COMMAND_NAME).unwrap();
         assert_eq!(name, "compute-pcrs-105a7802d8-quay-io-some-ref-some-tag");
     }
 
     #[test]
-    fn test_get_job_name_sha() {
-        let name = get_job_name(DUMMY_IMAGE_REF).unwrap();
+    fn test_rfc1035_sha() {
+        let name = rfc1035(DUMMY_IMAGE_REF, PCR_COMMAND_NAME).unwrap();
         assert_eq!(
             name,
             "compute-pcrs-6c57e93939-quay-io-some-ref-sha256-e71dad00aa0e3d7"
