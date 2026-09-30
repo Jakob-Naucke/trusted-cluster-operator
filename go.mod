@@ -10,8 +10,8 @@ require (
 	github.com/cert-manager/cert-manager v1.20.4
 	github.com/mikefarah/yq/v4 v4.53.6
 	github.com/projectcalico/api v0.0.0-20251022175904-f2ab03771208
-	k8s.io/api v0.35.8
-	k8s.io/apimachinery v0.35.8
+	k8s.io/api v0.35.9
+	k8s.io/apimachinery v0.35.9
 	sigs.k8s.io/controller-runtime v0.23.3
 	sigs.k8s.io/controller-tools v0.20.1
 	sigs.k8s.io/yaml v1.6.0
