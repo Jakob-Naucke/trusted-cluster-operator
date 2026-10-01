@@ -503,23 +503,6 @@ mod tests {
         ctx
     }
 
-    const DUMMY_IMAGE_REF: &str =
-        "quay.io/some-ref@sha256:e71dad00aa0e3d70540e726a0c66407e3004d96e045ab6c253186e327a2419e5";
-
-    fn dummy_image() -> ApprovedImage {
-        ApprovedImage {
-            metadata: ObjectMeta {
-                name: Some("test".to_string()),
-                uid: Some("test".to_string()),
-                ..Default::default()
-            },
-            spec: ApprovedImageSpec {
-                image: DUMMY_IMAGE_REF.to_string(),
-            },
-            status: None,
-        }
-    }
-
     fn dummy_job() -> Job {
         Job {
             metadata: ObjectMeta {
