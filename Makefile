@@ -260,6 +260,10 @@ test: crds-rs
 test-release: crds-rs
 	cargo test --workspace --bins --lib --release
 
+test-all-features: generate-openshift
+	$(MAKE) crds-rs
+	cargo test --workspace --bins --lib --all-features
+
 INTEGRATION_TEST_ENV = RUST_LOG=info REGISTRY=$(REGISTRY) TAG=$(TAG) \
 	TRUSTEE_IMAGE=$(TRUSTEE_IMAGE) APPROVED_IMAGE=$(APPROVED_IMAGE) TEST_IMAGE=$(TEST_IMAGE)
 INTEGRATION_TEST_FLAGS = --features virtualization -- --nocapture --test-threads=$(INTEGRATION_TEST_THREADS)
