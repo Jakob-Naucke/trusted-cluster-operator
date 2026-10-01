@@ -77,6 +77,14 @@ pub fn compare_pcrs(actual: &[Pcr], expected: &[Pcr]) -> bool {
     true
 }
 
+pub fn image_ready(image: Option<&ApprovedImage>) -> bool {
+    let chk_cond = |c: &Condition| c.type_ == COMMITTED_CONDITION && c.status == "True";
+    let chk_status =
+        |st: &ApprovedImageStatus| st.conditions.as_ref().map(|cs| cs.iter().any(chk_cond));
+    let chk = |img: &ApprovedImage| img.status.as_ref().and_then(chk_status);
+    image.and_then(chk).unwrap_or(false)
+}
+
 fn timeout_multiplier() -> f64 {
     env::var(TEST_TIMEOUT_MULTIPLIER_ENV)
         .ok()
@@ -1058,13 +1066,6 @@ impl TestContext {
         let info = format!("Waiting for ApprovedImage {APPROVED_IMAGE_NAME} to be Committed");
         self.info(info);
         let images: Api<ApprovedImage> = Api::namespaced(self.client.clone(), ns);
-        let image_ready = |img: Option<&ApprovedImage>| {
-            let chk_cond = |c: &Condition| c.type_ == COMMITTED_CONDITION && c.status == "True";
-            let chk_status =
-                |st: &ApprovedImageStatus| st.conditions.as_ref().map(|cs| cs.iter().any(chk_cond));
-            let chk = |img: &ApprovedImage| img.status.as_ref().and_then(chk_status);
-            img.and_then(chk).unwrap_or(false)
-        };
         let done = await_condition(images.clone(), constants::APPROVED_IMAGE_NAME, image_ready);
         let ctx = format!(
             "waiting for ApprovedImage {} to be Committed",
