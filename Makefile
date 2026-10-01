@@ -94,8 +94,8 @@ $(CRD_RS_PATH):
 	mkdir $(CRD_RS_PATH)
 
 $(CRD_RS_PATH)/%.rs: $(CRD_YAML_PATH)/*_%.yaml $(KOPIUM) $(CRD_RS_PATH)
-	$(KOPIUM) -f $< $$(grep -Eq '(certificates|issuers)' <<< $< && echo --derive Default) > $@
-	sed -i 'N; s/, Default)\]\n\(pub struct CertificateAdditionalOutputFormats\)/)]\n\1/; P; D' $@
+	$(KOPIUM) -f $< $$(grep -Eq '(certificates|issuers|machineconfig(pool)?s)' <<< $< && echo --derive Default) > $@
+	sed -Ei 'N; s/, Default\)\]\n(pub struct (CertificateAdditionalOutputFormats|MachineConfigPoolStatusPoolSynchronizersStatus))/)]\n\1/; P; D' $@
 	rustfmt $@
 
 crds-rs: generate $(KOPIUM) $(CRD_RS_PATH)
@@ -254,6 +254,10 @@ test: crds-rs
 
 test-release: crds-rs
 	cargo test --workspace --bins --lib --release
+
+test-all-features: generate-openshift
+	$(MAKE) crds-rs
+	cargo test --workspace --bins --lib --all-features
 
 INTEGRATION_TEST_ENV = RUST_LOG=info REGISTRY=$(REGISTRY) TAG=$(TAG) \
 	TRUSTEE_IMAGE=$(TRUSTEE_IMAGE) APPROVED_IMAGE=$(APPROVED_IMAGE) TEST_IMAGE=$(TEST_IMAGE)
