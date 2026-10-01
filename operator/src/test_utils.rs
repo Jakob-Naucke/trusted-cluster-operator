@@ -11,8 +11,8 @@ use kube::runtime::reflector::{self, Lookup, Store};
 use kube::runtime::watcher;
 use std::collections::BTreeMap;
 use std::hash::Hash;
-use trusted_cluster_operator_lib::{ApprovedImage, ApprovedImageSpec, TrustedExecutionCluster};
 use trusted_cluster_operator_lib::reference_values::pcrs_to_status;
+use trusted_cluster_operator_lib::{ApprovedImage, ApprovedImageSpec, TrustedExecutionCluster};
 use trusted_cluster_operator_lib::{ApprovedImageStatusPcrs, Machine, MachineSpec};
 
 /// Build a reflector [`Store`] pre-populated with `items`, for tests that
