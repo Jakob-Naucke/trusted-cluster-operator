@@ -161,3 +161,221 @@ pub async fn launch_rv_mc_controller(ctx: Arc<OperatorContext>) {
             .for_each(controller_info),
     );
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_utils::{DUMMY_IMAGE_REF, dummy_image, store_with};
+
+    use http::{Method, Request, StatusCode};
+    use kube::client::Body;
+    use machineconfigpools::MachineConfigPoolMachineConfigSelector;
+    use machineconfigpools::MachineConfigPoolMachineConfigSelectorMatchExpressions;
+    use trusted_cluster_operator_test_utils::mock_client::*;
+
+    const MAPI_ROLE: &str = "machineconfiguration.openshift.io/role";
+    const MC_NAME: &str = "worker-cvm";
+
+    fn match_labels() -> BTreeMap<String, String> {
+        BTreeMap::from([(MAPI_ROLE.to_string(), MC_NAME.to_string())])
+    }
+
+    fn image_labels() -> BTreeMap<String, String> {
+        BTreeMap::from([(MC_LABEL.to_string(), MC_NAME.to_string())])
+    }
+
+    fn dummy_mc() -> MachineConfig {
+        let mut mc = MachineConfig::default();
+        mc.metadata.name = Some(MC_NAME.to_string());
+        mc.metadata.labels = Some(match_labels());
+        mc.spec.os_image_url = Some(DUMMY_IMAGE_REF.to_string());
+        mc
+    }
+
+    fn dummy_mcp() -> MachineConfigPool {
+        let mut mcp = MachineConfigPool::default();
+        mcp.metadata.name = Some(MC_NAME.to_string());
+        mcp.spec.machine_config_selector = Some(MachineConfigPoolMachineConfigSelector {
+            match_expressions: None,
+            match_labels: Some(match_labels()),
+        });
+        mcp
+    }
+
+    #[test]
+    fn test_is_live_exp() {
+        let mut mcp = dummy_mcp();
+        let label_value = match_labels().get(MAPI_ROLE).unwrap().to_string();
+        let exp = MachineConfigPoolMachineConfigSelectorMatchExpressions {
+            key: MAPI_ROLE.to_string(),
+            operator: "In".to_string(),
+            values: Some(vec![label_value, "whatever".to_string()]),
+        };
+        mcp.spec.machine_config_selector = Some(MachineConfigPoolMachineConfigSelector {
+            match_expressions: Some(vec![exp]),
+            match_labels: None,
+        });
+
+        let mut mc = dummy_mc();
+        let match_labels = mc.metadata.labels.as_mut().unwrap();
+        match_labels.insert("something".to_string(), "else".to_string());
+        assert!(is_live(&mcp, &mc));
+
+        let selector = mcp.spec.machine_config_selector.as_mut().unwrap();
+        let exps = selector.match_expressions.as_mut().unwrap();
+        exps.push(MachineConfigPoolMachineConfigSelectorMatchExpressions {
+            key: "foo".to_string(),
+            operator: "Exists".to_string(),
+            values: None,
+        });
+        assert!(!is_live(&mcp, &mc));
+    }
+
+    #[test]
+    fn test_is_live_label() {
+        let mut mcp = dummy_mcp();
+        let mut mc = dummy_mc();
+        let mut labels = match_labels();
+        labels.insert("something".to_string(), "else".to_string());
+        mc.metadata.labels = Some(labels);
+        assert!(is_live(&mcp, &mc));
+
+        let selector = mcp.spec.machine_config_selector.as_mut().unwrap();
+        let labels = selector.match_labels.as_mut().unwrap();
+        labels.insert("foo".to_string(), "bar".to_string());
+        assert!(!is_live(&mcp, &mc));
+    }
+
+    #[test]
+    fn test_is_live_nothing() {
+        assert!(!is_live(&Default::default(), &Default::default()));
+    }
+
+    #[tokio::test]
+    async fn test_add_approved_image_success() {
+        let clos = async |req: Request<Body>, _| match req.method() {
+            &Method::POST => {
+                let body = get_body_string(req).await;
+                assert!(body.contains(DUMMY_IMAGE_REF));
+                Ok(serde_json::to_string(&dummy_image()).unwrap())
+            }
+            _ => panic!("unexpected API interaction: {req:?}"),
+        };
+        let mut mc = dummy_mc();
+        mc.spec.os_image_url = Some(DUMMY_IMAGE_REF.to_string());
+        count_check!(1, clos, |client| {
+            let result = add_approved_image(&mc, &OperatorContext::new(client)).await;
+            assert_eq!(result.unwrap(), LONG_REQUEUE);
+        });
+    }
+
+    #[tokio::test]
+    async fn test_add_approved_image_no_url() {
+        let clos = async |req: Request<_>, _| panic!("unexpected API interaction: {req:?}");
+        let mut mc = dummy_mc();
+        mc.spec.os_image_url = None;
+        count_check!(0, clos, |client| {
+            let result = add_approved_image(&mc, &OperatorContext::new(client)).await;
+            assert_eq!(result.unwrap(), LONG_REQUEUE);
+        });
+    }
+
+    #[tokio::test]
+    async fn test_add_approved_image_error() {
+        let clos = async |_, _| Err(StatusCode::INTERNAL_SERVER_ERROR);
+        count_check!(1, clos, |client| {
+            let result = add_approved_image(&dummy_mc(), &OperatorContext::new(client)).await;
+            assert!(result.is_err());
+        });
+    }
+
+    #[tokio::test]
+    async fn test_delete_approved_image() {
+        let clos = async |req: Request<_>, _| match req.method() {
+            &Method::DELETE => Ok(serde_json::to_string(&dummy_image()).unwrap()),
+            _ => panic!("unexpected API interaction: {req:?}"),
+        };
+        count_check!(1, clos, |client| {
+            let result = delete_approved_image(&dummy_image(), client).await;
+            assert_eq!(result.unwrap(), ());
+        });
+    }
+
+    #[tokio::test]
+    async fn test_handle_machineconfig_noop() {
+        let clos = async |req: Request<_>, _| panic!("unexpected API interaction: {req:?}");
+        count_check!(0, clos, |client| {
+            let result = handle_machineconfig(&dummy_mc(), &OperatorContext::new(client)).await;
+            assert_eq!(result.unwrap(), LONG_REQUEUE);
+        });
+    }
+
+    #[tokio::test]
+    async fn test_handle_machineconfig_new() {
+        let clos = async |req: Request<_>, _| match req.method() {
+            &Method::POST => Ok(serde_json::to_string(&dummy_image()).unwrap()),
+            _ => panic!("unexpected API interaction: {req:?}"),
+        };
+
+        count_check!(1, clos, |client| {
+            let mut ctx = OperatorContext::new(client);
+            ctx.mcp_store = store_with(vec![dummy_mcp()]);
+            let result = handle_machineconfig(&dummy_mc(), &ctx).await;
+            assert_eq!(result.unwrap(), LONG_REQUEUE);
+        });
+    }
+
+    #[tokio::test]
+    async fn test_handle_machineconfig_moved_out_of_scope() {
+        let clos = async |req: Request<_>, _| match req.method() {
+            &Method::DELETE => Ok(serde_json::to_string(&dummy_image()).unwrap()),
+            _ => panic!("unexpected API interaction: {req:?}"),
+        };
+        let mut image = dummy_image();
+        image.metadata.labels = Some(image_labels());
+        count_check!(1, clos, |client| {
+            let mut ctx = OperatorContext::new(client);
+            ctx.image_store = store_with(vec![image]);
+            let result = handle_machineconfig(&dummy_mc(), &ctx).await;
+            assert_eq!(result.unwrap(), LONG_REQUEUE);
+        });
+    }
+
+    #[tokio::test]
+    async fn test_handle_machineconfig_url_changed() {
+        let clos = async |req: Request<_>, ctr: u32| match (ctr, req.method()) {
+            (0, &Method::DELETE) => Ok(serde_json::to_string(&dummy_image()).unwrap()),
+            (1, &Method::POST) => Ok(serde_json::to_string(&dummy_image()).unwrap()),
+            _ => panic!("unexpected API interaction: {req:?}, counter {ctr}"),
+        };
+
+        let mut image = dummy_image();
+        image.metadata.labels = Some(image_labels());
+        let mut mc = dummy_mc();
+        mc.spec.os_image_url = Some("something.else".to_string());
+
+        count_check!(2, clos, |client| {
+            let mut ctx = OperatorContext::new(client);
+            ctx.mcp_store = store_with(vec![dummy_mcp()]);
+            ctx.image_store = store_with(vec![image]);
+            let result = handle_machineconfig(&mc, &ctx).await;
+            assert_eq!(result.unwrap(), LONG_REQUEUE);
+        });
+    }
+
+    #[tokio::test]
+    async fn test_find_and_delete_approved_image() {
+        let clos = async |req: Request<_>, _| match req.method() {
+            &Method::DELETE => Ok(serde_json::to_string(&dummy_image()).unwrap()),
+            _ => panic!("unexpected API interaction: {req:?}"),
+        };
+        let mut image = dummy_image();
+        image.metadata.labels = Some(image_labels());
+        count_check!(1, clos, |client| {
+            let mut ctx = OperatorContext::new(client);
+            ctx.image_store = store_with(vec![image]);
+            let result = find_and_delete_approved_image(&dummy_mc(), &ctx).await;
+            assert_eq!(result.unwrap(), LONG_REQUEUE);
+        });
+    }
+}
