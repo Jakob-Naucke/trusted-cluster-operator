@@ -12,6 +12,7 @@ ARG deployment_base=quay.io/fedora/fedora-minimal:43
 FROM ghcr.io/trusted-execution-clusters/buildroot:fedora AS builder
 LABEL project=trusted-cluster-operator
 ARG build_type
+ENV OPENSSL_NO_VENDOR=1
 WORKDIR /build
 
 COPY Makefile Cargo.toml Cargo.lock go.mod go.sum .
