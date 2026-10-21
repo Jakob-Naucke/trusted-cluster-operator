@@ -38,7 +38,7 @@ updates:
         versions: [">=0.21"]
       - dependency-name: "github.com/cert-manager/cert-manager"
         versions: [">=1.21"]
-      - dependency-name: "github.com/mikefarah/yq"
+      - dependency-name: "github.com/mikefarah/yq/v4"
         versions: [">=4.54"]
   - package-ecosystem: "cargo"
     directory: "/"
