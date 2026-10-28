@@ -5,6 +5,7 @@
 use anyhow::{Context, Result};
 use futures_util::StreamExt;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelectorRequirement;
+use kube::Client;
 use kube::core::{Expression, Selector, SelectorExt};
 use kube::runtime::watcher::Config as WatcherConfig;
 use kube::runtime::{Controller, controller::Action, reflector::ObjectRef};
@@ -13,11 +14,13 @@ use log::warn;
 use std::{collections::BTreeMap, sync::Arc};
 
 use operator::*;
+use trusted_cluster_operator_lib::controllerconfigs::ControllerConfig;
 use trusted_cluster_operator_lib::machineconfigpools::MachineConfigPool;
 use trusted_cluster_operator_lib::machineconfigs::MachineConfig;
 use trusted_cluster_operator_lib::{reference_values::*, *};
 
 const MC_LABEL: &str = "trusted-execution-clusters.io/based-on-machineconfig";
+const BASEOS_LABEL: &str = "trusted-execution-clusters.io/based-on-baseoscontainerimage";
 
 /// Check if MCP is labelled to autocreate images and MCP's label selectors would select MC
 fn is_live(mcp: &MachineConfigPool, mc: &MachineConfig) -> bool {
@@ -92,6 +95,17 @@ async fn add_mc_image(mc: &MachineConfig, ctx: &OperatorContext) -> Result<()> {
     add_approved_image(image_name, labels, url, ctx.client.clone()).await
 }
 
+async fn add_baseos_image(cc: &ControllerConfig, ctx: &OperatorContext) -> Result<()> {
+    let url = cc.spec.base_os_container_image.clone();
+    if url.is_empty() {
+        warn!("Registered baseOSContainerImage in ControllerConfig, but it was empty");
+        return Ok(());
+    }
+    let image_name = rfc1035(&format!("baseos-{url}"), OSIMAGE_RESOURCE_PREFIX)?;
+    let labels = BTreeMap::from([(BASEOS_LABEL.to_string(), String::new())]);
+    add_approved_image(image_name, labels, url, ctx.client.clone()).await
+}
+
 async fn mc_reconcile(
     mc: Arc<MachineConfig>,
     ctx: Arc<OperatorContext>,
@@ -107,6 +121,21 @@ async fn mc_reconcile(
     };
     if live && ctx.image_store.find(is_stored).is_none() {
         add_mc_image(&mc, &ctx).await.map_err(controller_into)?;
+    }
+    Ok(LONG_REQUEUE)
+}
+
+async fn cc_reconcile(
+    cc: Arc<ControllerConfig>,
+    ctx: Arc<OperatorContext>,
+) -> Result<Action, ControllerError> {
+    let is_stored = |i: &ApprovedImage| {
+        let labels = i.metadata.labels.as_ref();
+        labels.is_some_and(|ls| ls.get(BASEOS_LABEL).is_some())
+            && cc.spec.base_os_container_image == i.spec.image
+    };
+    if ctx.image_store.find(is_stored).is_none() {
+        add_baseos_image(&cc, &ctx).await.map_err(controller_into)?;
     }
     Ok(LONG_REQUEUE)
 }
@@ -133,6 +162,15 @@ pub async fn launch_rv_mc_controller(ctx: Arc<OperatorContext>) {
     );
 }
 
+pub async fn launch_rv_cc_controller(ctx: Arc<OperatorContext>) {
+    let ccs: Api<ControllerConfig> = Api::all(ctx.client.clone());
+    tokio::spawn(
+        Controller::new(ccs, Default::default())
+            .run(cc_reconcile, controller_error_policy, ctx)
+            .for_each(controller_info),
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -142,6 +180,7 @@ mod tests {
     use kube::client::Body;
     use machineconfigpools::MachineConfigPoolMachineConfigSelector;
     use machineconfigpools::MachineConfigPoolMachineConfigSelectorMatchExpressions;
+    use trusted_cluster_operator_lib::controllerconfigs::ControllerConfigSpec;
     use trusted_cluster_operator_test_utils::mock_client::*;
 
     const MAPI_ROLE: &str = "machineconfiguration.openshift.io/role";
@@ -171,6 +210,20 @@ mod tests {
             match_labels: Some(match_labels()),
         });
         mcp
+    }
+
+    fn dummy_cc() -> ControllerConfig {
+        ControllerConfig {
+            metadata: ObjectMeta {
+                name: Some(MC_NAME.to_string()),
+                ..Default::default()
+            },
+            spec: ControllerConfigSpec {
+                base_os_container_image: DUMMY_IMAGE_REF.to_string(),
+                ..Default::default()
+            },
+            status: Default::default(),
+        }
     }
 
     #[test]
@@ -278,11 +331,39 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_add_baseos_image_success() {
+        count_check!(1, image_success_closure, |client| {
+            let ctx = OperatorContext::new(client);
+            add_baseos_image(&dummy_cc(), &ctx).await.unwrap();
+        });
+    }
+
+    #[tokio::test]
+    async fn test_add_baseos_image_no_url() {
+        let clos = async |req: Request<_>, _| panic!("unexpected API interaction: {req:?}");
+        let mut cc = dummy_cc();
+        cc.spec.base_os_container_image = String::new();
+        count_check!(0, clos, |client| {
+            let ctx = OperatorContext::new(client);
+            add_baseos_image(&cc, &ctx).await.unwrap();
+        });
+    }
+
+    #[tokio::test]
     async fn test_mc_reconcile_new() {
         count_check!(1, image_success_closure, |client| {
             let mut ctx = OperatorContext::new(client);
             ctx.mcp_store = store_with(vec![dummy_mcp()]);
             let result = mc_reconcile(Arc::new(dummy_mc()), Arc::new(ctx)).await;
+            assert_eq!(result.unwrap(), LONG_REQUEUE);
+        });
+    }
+
+    #[tokio::test]
+    async fn test_cc_reconcile_new() {
+        count_check!(1, image_success_closure, |client| {
+            let ctx = Arc::new(OperatorContext::new(client));
+            let result = cc_reconcile(Arc::new(dummy_cc()), ctx).await;
             assert_eq!(result.unwrap(), LONG_REQUEUE);
         });
     }

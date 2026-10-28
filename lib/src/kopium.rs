@@ -12,6 +12,8 @@ pub mod machines;
 pub mod trustedexecutionclusters;
 
 #[cfg(feature = "openshift")]
+pub mod controllerconfigs;
+#[cfg(feature = "openshift")]
 pub mod machineconfigpools;
 #[cfg(feature = "openshift")]
 pub mod machineconfigs;

@@ -86,7 +86,7 @@ generate: $(CONTROLLER_GEN)
 	$(call controller-gen,github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1,*)
 
 generate-openshift: $(CONTROLLER_GEN)
-	$(call controller-gen,github.com/openshift/api/machineconfiguration/v1,machineconfiguration.openshift.io_machineconfig{s$(COMMA)pools}.yaml)
+	$(call controller-gen,github.com/openshift/api/machineconfiguration/v1,machineconfiguration.openshift.io_{controllerconfig$(COMMA)machineconfig{$(COMMA)pool}}s.yaml)
 
 RS_LIB_PATH = lib/src
 CRD_RS_PATH = $(RS_LIB_PATH)/kopium

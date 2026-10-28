@@ -24,6 +24,8 @@ pub use vendor_kopium::virtualmachineinstances;
 pub use vendor_kopium::virtualmachines;
 
 #[cfg(feature = "openshift")]
+pub use kopium::controllerconfigs;
+#[cfg(feature = "openshift")]
 pub use kopium::machineconfigpools;
 #[cfg(feature = "openshift")]
 pub use kopium::machineconfigs;

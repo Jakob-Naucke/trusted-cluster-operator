@@ -59,6 +59,7 @@ A reference value listing for Trustee could then look like this:
 ## OpenShift MachineConfig detection
 
 When the operator is compiled with the `openshift` feature, it automatically creates ApprovedImages for all the `osImageURL`s of MachineConfigs that are in scope of a MachineConfigPool with the label `trusted-execution-clusters.io/autocreate-approved-images`.
+It does the same for the image in the `baseOSContainerImage` spec of Machine Config Operator's ControllerConfig resource.
 These images are not removed automatically.
 
 ## Data flow

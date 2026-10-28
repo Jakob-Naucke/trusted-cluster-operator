@@ -329,6 +329,8 @@ async fn main() -> Result<()> {
     trustee::launch_trustee_sync_controller(ctx.clone()).await;
     #[cfg(feature = "openshift")]
     openshift_images::launch_rv_mc_controller(ctx.clone()).await;
+    #[cfg(feature = "openshift")]
+    openshift_images::launch_rv_cc_controller(ctx.clone()).await;
 
     Controller::new(cl, watcher::Config::default())
         .run(reconcile, controller_error_policy, ctx)
