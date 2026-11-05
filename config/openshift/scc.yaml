@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: Yalan Zhang <yalzhang@redhat.com>
+# SPDX-FileCopyrightText: Jakob Naucke <jnaucke@redhat.com>
 #
 # SPDX-License-Identifier: CC0-1.0
 apiVersion: security.openshift.io/v1
@@ -35,3 +36,22 @@ volumes:
 - secret
 users:
 - system:serviceaccount:<NAMESPACE>:trusted-cluster-operator
+---
+# The machine daemon runs as a privileged daemonset (see
+# docs/design/tls-updates.md), so on OpenShift its ServiceAccount needs the
+# built-in privileged SCC. That SCC is cluster-provided, unlike
+# <NAMESPACE>-trusted-cluster-scc above, so it is granted through its
+# auto-generated ClusterRole rather than listed in a custom SCC's users.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: machine-daemon-privileged-scc
+  namespace: <NAMESPACE>
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:openshift:scc:privileged
+subjects:
+- kind: ServiceAccount
+  name: trusted-cluster-machine-daemon
+  namespace: <NAMESPACE>

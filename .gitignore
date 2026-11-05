@@ -11,6 +11,7 @@ trusted-cluster-gen
 /config/crd
 /config/deploy
 /config/rbac/role.yaml
+/config/rbac/machinedaemon_role.yaml
 /config/rbac/kustomization.yaml
 /lib/src/kopium
 /logs

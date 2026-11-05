@@ -29,6 +29,12 @@ resources:
   - role_binding.yaml
   - leader_election_role.yaml
   - leader_election_role_binding.yaml
+  # ServiceAccount for the machine daemon the operator schedules onto
+  # trusted-execution-clusters.io/machine-labeled nodes. See
+  # docs/design/tls-updates.md.
+  - machine_daemon_service_account.yaml
+  - machinedaemon_role.yaml
+  - machine_daemon_role_binding.yaml
   # The following RBAC configurations are used to protect
   # the metrics endpoint with authn/authz. These configurations
   # ensure that only authorized users and service accounts
