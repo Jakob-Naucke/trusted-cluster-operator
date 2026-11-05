@@ -41,6 +41,8 @@ use std::time::Duration;
 /// Finalizer added to the Secret backing an AttestationKey.
 pub const ATTESTATION_KEY_SECRET_FINALIZER: &str =
     "trusted-execution-clusters.io/attestationkey-secret-finalizer";
+/// Secret for Trustee admin interaction
+pub const TRUSTEE_AUTH_SECRET: &str = "trustee-auth";
 
 #[macro_export]
 macro_rules! update_status {

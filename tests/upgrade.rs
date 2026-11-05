@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: MIT
 
+use trusted_cluster_operator_lib::TRUSTEE_AUTH_SECRET;
 use trusted_cluster_operator_test_utils::*;
 
 cfg_if::cfg_if! {
@@ -206,7 +207,7 @@ async fn test_real_version_upgrade() -> anyhow::Result<()> {
     // Includes attestation policies, reference values, LUKS keys, and attestation keys, trustee secrets and configmaps and kbs-config.toml.
 
     // Auth key pair (used by operator to authenticate with KBS API).
-    let trustee_secret = secrets.get("trustee-auth").await
+    let trustee_secret = secrets.get(TRUSTEE_AUTH_SECRET).await
         .context("trustee-auth secret should exist after upgrade")?;
     let auth_data = trustee_secret.data.as_ref()
         .expect("trustee-auth secret should have data");

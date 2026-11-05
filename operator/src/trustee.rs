@@ -39,13 +39,12 @@ use operator::{ControllerError, OperatorContext, TLS_DIR, controller_error_polic
 use operator::{controller_info, create_or_info_if_exists, read_certificate};
 use trusted_cluster_operator_lib::conditions::COMMITTED_CONDITION;
 use trusted_cluster_operator_lib::reference_values::status_to_tpm_events;
-use trusted_cluster_operator_lib::{ApprovedImage, ApprovedImageStatusPcrs, endpoints::*};
+use trusted_cluster_operator_lib::{endpoints::*, *};
 
 const TRUSTEE_DATA_DIR: &str = "/etc/kbs";
 const KBS_CONFIG_FILE: &str = "kbs-config.toml";
 
 pub(crate) const TRUSTEE_DATA_MAP: &str = "trustee-data";
-const TRUSTEE_AUTH_SECRET: &str = "trustee-auth";
 const TRUSTEE_AUTH_KEY_DIR: &str = "/opt/trustee/keys";
 const TRUSTEE_STORAGE_VOLUME: &str = "trustee-storage";
 const TRUSTEE_STORAGE_DIR: &str = "/opt/trustee/storage";
