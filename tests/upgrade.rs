@@ -207,6 +207,7 @@ async fn test_real_version_upgrade() -> anyhow::Result<()> {
     // Includes attestation policies, reference values, LUKS keys, and attestation keys, trustee secrets and configmaps and kbs-config.toml.
 
     // Auth key pair (used by operator to authenticate with KBS API).
+    wait_for_resource_created(&secrets, TRUSTEE_AUTH_SECRET, scaled_timeout(60)).await?;
     let trustee_secret = secrets.get(TRUSTEE_AUTH_SECRET).await
         .context("trustee-auth secret should exist after upgrade")?;
     let auth_data = trustee_secret.data.as_ref()
