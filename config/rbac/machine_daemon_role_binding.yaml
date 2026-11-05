@@ -1,0 +1,23 @@
+# SPDX-FileCopyrightText: Jakob Naucke <jnaucke@redhat.com>
+#
+# SPDX-License-Identifier: CC0-1.0
+
+# Binds the cluster-wide machine-daemon-role only within the operator's
+# namespace: every machine daemon pod runs there, and so do the Machine and
+# trustee-certs resources it needs access to.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  labels:
+    app.kubernetes.io/name: trusted-cluster-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: machine-daemon-rolebinding
+  namespace: system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: machine-daemon-role
+subjects:
+- kind: ServiceAccount
+  name: trusted-cluster-machine-daemon
+  namespace: system

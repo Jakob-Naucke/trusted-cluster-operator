@@ -85,9 +85,13 @@ CRD_YAML_PATH = config/crd
 CRD_WORK_PATH = config/crd/tmp
 RBAC_YAML_PATH = config/rbac
 API_PATH = api/v1alpha1
+MACHINE_DAEMON_API_PATH = api/machinedaemon
 generate: $(CONTROLLER_GEN)
-	$(call controller-gen,./api/...,*)
+	$(call controller-gen,./$(API_PATH)/...,*)
 	$(call controller-gen,github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1,*)
+	$(CONTROLLER_GEN) rbac:roleName=machine-daemon-role,fileName=machinedaemon_role.yaml \
+		paths=./$(MACHINE_DAEMON_API_PATH)/... \
+		output:rbac:artifacts:config=$(RBAC_YAML_PATH)
 
 RS_LIB_PATH = lib/src
 CRD_RS_PATH = $(RS_LIB_PATH)/kopium
@@ -226,7 +230,7 @@ pre-pull-images:
 clean:
 	cargo clean
 	rm -rf bin manifests $(CRD_YAML_PATH) $(CRD_RS_PATH)
-	rm -f trusted-cluster-gen config/rbac/role.yaml .crates.toml .crates2.json
+	rm -f trusted-cluster-gen config/rbac/role.yaml config/rbac/machinedaemon_role.yaml .crates.toml .crates2.json
 	$(CONTAINER_CLI) image prune --all --force --filter label=project=trusted-cluster-operator
 	# Prune --mount=type=cache data: podman uses --build-cache, docker uses builder prune (no label filter supported by either)
 	@if $(CONTAINER_CLI) image prune --help 2>&1 | grep -q -- '--build-cache'; then \
