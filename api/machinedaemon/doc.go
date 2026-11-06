@@ -9,5 +9,5 @@
 //
 // +kubebuilder:rbac:groups=trusted-execution-clusters.io,resources=machines,verbs=get;list;watch
 // +kubebuilder:rbac:groups=trusted-execution-clusters.io,resources=machines/status,verbs=get;patch;update
-// +kubebuilder:rbac:groups="",resources=configmaps,resourceNames=trustee-certs,verbs=get;watch
+// +kubebuilder:rbac:groups="",resources=configmaps,resourceNames=trustee-certs,verbs=get;list;watch
 package machinedaemon

@@ -40,3 +40,8 @@ pub const MACHINE_KEY_NOT_PROVISIONED_REASON: &str = "ProvisioningFailed";
 pub const MACHINE_AK_APPROVED_CONDITION: &str = "AttestationKeyApproved";
 pub const MACHINE_AK_APPROVED_REASON: &str = "KeyApproved";
 pub const MACHINE_AK_NOT_APPROVED_REASON: &str = "NoKeyMatched";
+
+pub const CERTS_UPDATED_CONDITION: &str = "CertsUpdated";
+pub const CERTS_UPDATED_REASON: &str = "Updated";
+pub const CERTS_UPDATING_REASON: &str = "Updating";
+pub const CERTS_UPDATE_FAILED_REASON: &str = "Failed";

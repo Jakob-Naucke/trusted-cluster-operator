@@ -155,6 +155,10 @@ type MachineStatus struct {
 	// +listMapKey=type
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+
+	// Hashes of the certificates currently installed in the machine's Clevis LUKS header
+	// +optional
+	InstalledCerts []string `json:"installedCerts,omitempty"`
 }
 
 // +kubebuilder:object:root=true

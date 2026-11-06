@@ -3,11 +3,10 @@
 #
 # SPDX-License-Identifier: CC0-1.0
 
-
-.PHONY: all build build-tools crds-rs crds-rs-all-features generate apply-crds manifests cluster-up cluster-cleanup cluster-down \
+.PHONY: all build build-tools crds-rs generate manifests cluster-up cluster-down \
 	install-trustee install-operator clean fmt-check clippy lint test test-release release-tarball prepare-release \
-	operator-image compute-pcrs-image reg-server-image attestation-key-register-image image \
-	push-operator push-compute-pcrs push-reg-server push-attestation-key-register push \
+	operator-image compute-pcrs-image reg-server-image attestation-key-register-image machine-daemon-image image \
+	push-operator push-compute-pcrs push-reg-server push-attestation-key-register push-machine-daemon push \
 
 SHELL := /bin/bash
 
@@ -54,6 +53,7 @@ OPERATOR_IMAGE ?= $(REGISTRY)/trusted-cluster-operator:$(TAG)
 COMPUTE_PCRS_IMAGE=$(REGISTRY)/compute-pcrs:$(TAG)
 REG_SERVER_IMAGE=$(REGISTRY)/registration-server:$(TAG)
 ATTESTATION_KEY_REGISTER_IMAGE=$(REGISTRY)/attestation-key-register:$(TAG)
+MACHINE_DAEMON_IMAGE=$(REGISTRY)/machine-daemon:$(TAG)
 
 TRUSTEE_IMAGE ?= quay.io/trusted-execution-clusters/key-broker-service:v0.20.0
 
@@ -70,7 +70,7 @@ BUILD_TYPE ?= release
 IMAGE_BUILD_OPTION ?=
 IMAGE_BUILD_OPTIONS=--build-arg build_type=$(BUILD_TYPE) $(IMAGE_BUILD_OPTION)
 
-all: build trusted-cluster-gen reg-server attestation-key-register
+all: build trusted-cluster-gen reg-server attestation-key-register machine-daemon
 
 build: crds-rs
 	cargo build -p compute-pcrs
@@ -81,6 +81,9 @@ reg-server: crds-rs
 
 attestation-key-register: crds-rs
 	cargo build -p attestation-key-register
+
+machine-daemon: crds-rs
+	cargo build -p machine-daemon
 
 CRD_YAML_PATH = config/crd
 CRD_WORK_PATH = config/crd/tmp
@@ -130,6 +133,7 @@ manifests: trusted-cluster-gen generate
 		-pcrs-compute-image $(COMPUTE_PCRS_IMAGE) \
 		-register-server-image $(REG_SERVER_IMAGE) \
 		-attestation-key-register-image $(ATTESTATION_KEY_REGISTER_IMAGE) \
+		-machine-daemon-image $(MACHINE_DAEMON_IMAGE) \
 		-approved-image coreos,$(APPROVED_IMAGE)
 
 cluster-up:
@@ -149,8 +153,10 @@ reg-server-image:
 	$(CONTAINER_CLI) build $(IMAGE_BUILD_OPTIONS) --target register-server -t $(REG_SERVER_IMAGE) -f Containerfile .
 attestation-key-register-image:
 	$(CONTAINER_CLI) build $(IMAGE_BUILD_OPTIONS) --target attestation-key-register -t $(ATTESTATION_KEY_REGISTER_IMAGE) -f Containerfile .
+machine-daemon-image:
+	$(CONTAINER_CLI) build $(IMAGE_BUILD_OPTIONS) --target machine-daemon -t $(MACHINE_DAEMON_IMAGE) -f Containerfile .
 
-image: operator-image compute-pcrs-image reg-server-image attestation-key-register-image
+image: operator-image compute-pcrs-image reg-server-image attestation-key-register-image machine-daemon-image
 
 define push-image
 $(CONTAINER_CLI) push $(1) $(PUSH_FLAGS)
@@ -165,8 +171,10 @@ push-reg-server: reg-server-image
 	$(call push-image,$(REG_SERVER_IMAGE))
 push-attestation-key-register: attestation-key-register-image
 	$(call push-image,$(ATTESTATION_KEY_REGISTER_IMAGE))
+push-machine-daemon: machine-daemon-image
+	$(call push-image,$(MACHINE_DAEMON_IMAGE))
 
-push: push-operator push-compute-pcrs push-reg-server push-attestation-key-register
+push: push-operator push-compute-pcrs push-reg-server push-attestation-key-register push-machine-daemon
 
 release-tarball: manifests
 	tar -cf trusted-execution-operator-$(TAG).tar config

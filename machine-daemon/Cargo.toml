@@ -1,0 +1,26 @@
+# SPDX-FileCopyrightText: Jakob Naucke <jnaucke@redhat.com>
+#
+# SPDX-License-Identifier: CC0-1.0
+
+[package]
+name = "machine-daemon"
+version = "0.2.3"
+description = "Rolls out trustee-certs updates onto operator-managed CVMs' Clevis LUKS headers"
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+clevis-pin-trustee-lib.workspace = true
+trusted-cluster-operator-lib = { path = "../lib" }
+env_logger.workspace = true
+futures-util.workspace = true
+k8s-openapi.workspace = true
+kube.workspace = true
+log.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+http.workspace = true
+trusted-cluster-operator-test-utils = { path = "../test_utils" }

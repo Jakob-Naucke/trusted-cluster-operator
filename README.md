@@ -18,6 +18,7 @@ The operator relies on Rust crates for its functionality.
 -   `/register-server`: A server that provides Clevis PINs for key retrieval with random UUIDs.
 -   `/attestation-key-register`: A server that accepts attestation key registrations from VMs and creates AttestationKey resources.
 -   `/compute-pcrs`: A program to compute PCR reference values using the [compute-pcrs library](https://github.com/trusted-execution-clusters/compute-pcrs) and update the related ApprovedImage status with the computed pcr values.
+-   `/machine-daemon`: A daemon to be scheduled on confidential nodes to manage identification and certificates.
 
 ### Other crates
 
