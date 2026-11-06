@@ -29,10 +29,13 @@ COPY register-server/Cargo.toml register-server/
 COPY register-server/src/lib.rs register-server/src/
 COPY attestation-key-register/Cargo.toml attestation-key-register/
 COPY attestation-key-register/src/lib.rs attestation-key-register/src/
+COPY machine-daemon/Cargo.toml machine-daemon/
+COPY machine-daemon/src/lib.rs machine-daemon/src/
 
-RUN sed -i 's/members = .*/members = ["lib", "operator", "compute-pcrs", "register-server", "attestation-key-register"]/' Cargo.toml && \
+RUN sed -i 's/members = .*/members = ["lib", "operator", "compute-pcrs", "register-server", "attestation-key-register", "machine-daemon"]/' Cargo.toml && \
     sed -i '/\[dev-dependencies\]/,$d' operator/Cargo.toml && \
     sed -i '/\[dev-dependencies\]/,$d' register-server/Cargo.toml && \
+    sed -i '/\[dev-dependencies\]/,$d' machine-daemon/Cargo.toml && \
     sed -i '/trusted-cluster-operator-test-utils/d' lib/Cargo.toml
 
 RUN --mount=type=cache,target=/build/target \
@@ -45,13 +48,14 @@ RUN --mount=type=cache,target=/build/target \
 RUN --mount=type=cache,target=/build/target \
     --mount=type=cache,target=/usr/local/cargo/registry \
     if [ "$build_type" = debug ]; then \
-      cargo build -p operator -p compute-pcrs -p register-server -p attestation-key-register; \
+      cargo build -p operator -p compute-pcrs -p register-server -p attestation-key-register -p machine-daemon; \
     fi
 
 COPY operator/src operator/src
 COPY compute-pcrs/src compute-pcrs/src
 COPY register-server/src register-server/src
 COPY attestation-key-register/src attestation-key-register/src
+COPY machine-daemon/src machine-daemon/src
 
 RUN --mount=type=cache,target=/build/target \
     --mount=type=cache,target=/usr/local/cargo/registry \
@@ -62,6 +66,7 @@ RUN --mount=type=cache,target=/build/target \
       -p compute-pcrs \
       -p register-server \
       -p attestation-key-register \
+      -p machine-daemon \
       $release_flag
 
 RUN --mount=type=cache,target=/build/target \
@@ -71,7 +76,8 @@ RUN --mount=type=cache,target=/build/target \
     cp /build/target/${profile_dir}/operator /output/ && \
     cp /build/target/${profile_dir}/compute-pcrs /output/ && \
     cp /build/target/${profile_dir}/register-server /output/ && \
-    cp /build/target/${profile_dir}/attestation-key-register /output/
+    cp /build/target/${profile_dir}/attestation-key-register /output/ && \
+    cp /build/target/${profile_dir}/machine-daemon /output/
 
 # Distribution stages
 FROM ${deployment_base} AS operator
@@ -87,6 +93,10 @@ FROM ${deployment_base} AS register-server
 COPY --from=builder /output/register-server /usr/bin
 EXPOSE 3030
 ENTRYPOINT ["/usr/bin/register-server"]
+
+FROM ${deployment_base} AS machine-daemon
+COPY --from=builder /output/machine-daemon /usr/bin
+ENTRYPOINT ["/usr/bin/machine-daemon"]
 
 
 FROM builder AS compute-pcrs-data

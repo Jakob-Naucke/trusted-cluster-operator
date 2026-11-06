@@ -40,6 +40,8 @@ use std::time::Duration;
 /// Finalizer added to the Secret backing an AttestationKey.
 pub const ATTESTATION_KEY_SECRET_FINALIZER: &str =
     "trusted-execution-clusters.io/attestationkey-secret-finalizer";
+/// Path where the machine daemon's DaemonSet mounts the node's root filesystem
+pub const MACHINE_DAEMON_HOST_ROOT: &str = "/host";
 
 #[macro_export]
 macro_rules! update_status {
@@ -155,6 +157,30 @@ pub fn committed_condition(
             }
             NOT_COMMITTED_REASON_PENDING => "Pod is pending, check pods for details",
             NOT_COMMITTED_REASON_FAILED => "Computation failed, check operator log for details",
+            _ => "",
+        }
+        .to_string(),
+        last_transition_time: transition_time(existing_status, type_, &status),
+        status,
+        observed_generation: generation,
+    }
+}
+
+pub fn certs_updated_condition(
+    reason: &str,
+    generation: Option<i64>,
+    existing_status: &Option<MachineStatus>,
+) -> Condition {
+    let status = condition_status(reason == CERTS_UPDATED_REASON);
+    let type_ = CERTS_UPDATED_CONDITION;
+    Condition {
+        type_: type_.to_string(),
+        reason: reason.to_string(),
+        message: match reason {
+            CERTS_UPDATING_REASON => "Updating the Clevis header to match trustee-certs",
+            CERTS_UPDATE_FAILED_REASON => {
+                "Failed to update the Clevis header, check machine daemon logs for details"
+            }
             _ => "",
         }
         .to_string(),

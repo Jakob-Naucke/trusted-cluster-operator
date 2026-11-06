@@ -3,11 +3,18 @@
 // SPDX-License-Identifier: MIT
 
 use anyhow::{Context, Result};
+use openssl::hash::{MessageDigest, hash};
 use std::collections::BTreeMap;
 
 /// Name of the ConfigMap describing the target state of nodes' certificates.
 /// See docs/design/tls-updates.md.
 pub const TRUSTEE_CERTS_CONFIG_MAP: &str = "trustee-certs";
+
+/// Hex-encoded SHA-256 hash of a PEM-encoded certificate, used to identify it in
+/// `MachineStatus.installedCerts` without storing the certificate itself.
+pub fn cert_hash(cert: &str) -> String {
+    hex::encode(hash(MessageDigest::sha256(), cert.as_bytes()).unwrap())
+}
 
 const MACHINE_CERTS_KEY: &str = "machine_certs";
 const REVOKED_CERTS_KEY: &str = "revoked_certs";

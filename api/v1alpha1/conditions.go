@@ -42,4 +42,10 @@ const (
 	MachineAkApprovedCondition     string = "AttestationKeyApproved"
 	MachineAkApprovedReason        string = "KeyApproved"
 	MachineAkNotApprovedReason     string = "NoKeyMatched"
+
+	// Conditions for the Machine's Clevis header, set by the machine daemon
+	CertsUpdatedCondition   string = "CertsUpdated"
+	CertsUpdatedReason      string = "Updated"
+	CertsUpdatingReason     string = "Updating"
+	CertsUpdateFailedReason string = "Failed"
 )

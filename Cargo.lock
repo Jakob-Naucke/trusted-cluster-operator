@@ -2862,6 +2862,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
 
 [[package]]
+name = "machine-daemon"
+version = "0.2.3"
+dependencies = [
+ "anyhow",
+ "clevis-pin-trustee-lib",
+ "env_logger",
+ "futures-util",
+ "http",
+ "k8s-openapi 0.28.0",
+ "kube 4.2.0",
+ "log",
+ "serde_json",
+ "tokio",
+ "trusted-cluster-operator-lib",
+ "trusted-cluster-operator-test-utils",
+]
+
+[[package]]
 name = "matchers"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4819,6 +4837,7 @@ dependencies = [
  "kopium",
  "kube 4.2.0",
  "log",
+ "openssl",
  "serde",
  "serde_json",
  "strum 0.28.0",
