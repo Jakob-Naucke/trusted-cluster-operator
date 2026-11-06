@@ -24,10 +24,6 @@ use trusted_cluster_operator_test_utils::virt::{self, VmBackend};
 
 const TEC_NAME: &str = "trusted-execution-cluster";
 
-// Image component names as they appear in registry paths; no existing constant covers these.
-const REGISTRATION_SERVER_COMPONENT: &str = "registration-server";
-const COMPUTE_PCRS_COMPONENT: &str = "compute-pcrs";
-
 // Helper functions to get the source and target operator and Trustee versions.
 fn source_operator_version() -> anyhow::Result<String> {
     Ok(std::env::var("UPGRADE_OLD_TAG")?)
@@ -165,11 +161,11 @@ async fn test_real_version_upgrade() -> anyhow::Result<()> {
     patch_operator_with_images(
         client,
         namespace,
-        &default_image(OPERATOR_DEPLOYMENT),
+        &image_or_default(OPERATOR_IMAGE_ENV, OPERATOR_DEPLOYMENT)?,
         &target_trustee_image(),
-        &default_image(REGISTRATION_SERVER_COMPONENT),
-        &default_image(ATTESTATION_KEY_REGISTER_DEPLOYMENT),
-        &default_image(COMPUTE_PCRS_COMPONENT),
+        &image_or_default(RELATED_IMAGE_REGISTRATION_SERVER, REGISTRATION_SERVER_COMPONENT)?,
+        &image_or_default(RELATED_IMAGE_ATTESTATION_KEY_REGISTER, ATTESTATION_KEY_REGISTER_DEPLOYMENT)?,
+        &image_or_default(RELATED_IMAGE_COMPUTE_PCRS, COMPUTE_PCRS_COMPONENT)?,
     ).await?;
     test_ctx.info(format!("Operator upgraded from {source_operator_version} to {target_tag}"));
 
