@@ -3172,7 +3172,6 @@ dependencies = [
  "openssl",
  "serde",
  "serde_json",
- "thiserror 2.0.21",
  "tokio",
  "toml",
  "trusted-cluster-operator-lib",
@@ -4825,6 +4824,7 @@ dependencies = [
  "serde",
  "serde_json",
  "strum 0.28.0",
+ "thiserror 2.0.21",
  "tokio",
  "trusted-cluster-operator-test-utils",
 ]

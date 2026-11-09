@@ -18,9 +18,9 @@ use kube::Resource;
 use kube::runtime::events::{Recorder, Reporter};
 use kube::runtime::reflector::{self, Store};
 use kube::runtime::watcher::watcher;
-use kube::{Api, Client, runtime::controller::Action};
-use log::{info, warn};
-use std::fmt::{Debug, Display};
+use kube::{Api, Client};
+use log::warn;
+use std::fmt::Debug;
 use std::{sync::Arc, time::Duration};
 use tokio::time::timeout;
 
@@ -30,6 +30,9 @@ use trusted_cluster_operator_lib::Conditions;
 pub use trusted_cluster_operator_lib::generate_owner_reference;
 use trusted_cluster_operator_lib::{
     ApprovedImage, AttestationKey, Machine, TrustedExecutionCluster,
+};
+pub use trusted_cluster_operator_lib::{
+    ControllerError, LONG_REQUEUE, controller_error_policy, controller_info,
 };
 
 /// Unified context shared across all controllers.
@@ -76,24 +79,6 @@ impl OperatorContext {
     }
 }
 
-#[derive(Debug, thiserror::Error)]
-pub enum ControllerError {
-    #[error("{0}")]
-    Anyhow(#[from] anyhow::Error),
-}
-
-pub fn controller_error_policy<R, E: Display, C>(_obj: Arc<R>, error: &E, _ctx: Arc<C>) -> Action {
-    log::error!("{error}");
-    Action::requeue(Duration::from_secs(60))
-}
-
-pub async fn controller_info<T: Debug, E: Debug>(res: Result<T, E>) {
-    match res {
-        Ok(o) => info!("reconciled {o:?}"),
-        Err(e) => info!("reconcile failed: {e:?}"),
-    }
-}
-
 pub fn new_recorder(client: Client, controller_name: &str) -> Recorder {
     let reporter = Reporter {
         controller: controller_name.into(),
@@ -119,10 +104,6 @@ macro_rules! create_or_info_if_exists {
 
 pub const KIND_LABEL_KEY: &str = "kind";
 pub const TLS_DIR: &str = "/etc/tls";
-/// As per kube-rs docs, it's possible to miss events and requeue_after = None should only be used
-/// when it is known another requeue is imminent. Use this requeue duration for cases where no
-/// further action is usually needed, but eventual consistency is desired.
-pub const LONG_REQUEUE: Action = Action::requeue(Duration::from_hours(1));
 
 /// Reads a TLS certificate secret and returns the Volume and VolumeMount for it.
 /// Returns None if the secret name is not provided or the secret does not exist.

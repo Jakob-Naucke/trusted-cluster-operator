@@ -28,9 +28,12 @@ use conditions::*;
 use k8s_openapi::api::apps::v1::Deployment;
 use k8s_openapi::api::core::v1::ObjectReference;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, OwnerReference, Time};
+use kube::runtime::controller::Action;
 use kube::runtime::events::{Event as K8sEvent, EventType, Recorder};
 use kube::runtime::wait::await_condition;
 use kube::{Api, Client, Resource};
+use std::fmt::{Debug, Display};
+use std::sync::Arc;
 use std::time::Duration;
 
 /// Finalizer added to the Secret backing an AttestationKey.
@@ -45,6 +48,29 @@ macro_rules! update_status {
             .map_err(Into::<anyhow::Error>::into)
     }}
 }
+
+#[derive(Debug, thiserror::Error)]
+pub enum ControllerError {
+    #[error("{0}")]
+    Anyhow(#[from] anyhow::Error),
+}
+
+pub fn controller_error_policy<R, E: Display, C>(_obj: Arc<R>, error: &E, _ctx: Arc<C>) -> Action {
+    log::error!("{error}");
+    Action::requeue(Duration::from_secs(60))
+}
+
+pub async fn controller_info<T: Debug, E: Debug>(res: Result<T, E>) {
+    match res {
+        Ok(o) => log::info!("reconciled {o:?}"),
+        Err(e) => log::info!("reconcile failed: {e:?}"),
+    }
+}
+
+/// As per kube-rs docs, it's possible to miss events and requeue_after = None should only be used
+/// when it is known another requeue is imminent. Use this requeue duration for cases where no
+/// further action is usually needed, but eventual consistency is desired.
+pub const LONG_REQUEUE: Action = Action::requeue(Duration::from_hours(1));
 
 pub fn condition_status(status: bool) -> String {
     match status {
