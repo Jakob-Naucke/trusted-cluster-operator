@@ -14,7 +14,6 @@ axum.workspace = true
 axum-server.workspace = true
 clap.workspace = true
 trusted-cluster-operator-lib = { path = "../lib" }
-env_logger.workspace = true
 k8s-openapi.workspace = true
 kube.workspace = true
 log.workspace = true

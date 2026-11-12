@@ -16,7 +16,6 @@ axum-server.workspace = true
 clap.workspace = true
 clevis-pin-trustee-lib.workspace = true
 trusted-cluster-operator-lib = { path = "../lib" }
-env_logger.workspace = true
 ignition-config.workspace = true
 k8s-openapi.workspace = true
 kube.workspace = true

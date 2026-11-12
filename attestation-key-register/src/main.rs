@@ -7,7 +7,6 @@ use axum::response::{IntoResponse, Json};
 use axum::{http::StatusCode, routing::put, Router};
 use axum_server::tls_openssl::OpenSSLConfig;
 use clap::Parser;
-use env_logger::Env;
 use k8s_openapi::api::core::v1::ObjectReference;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
 use kube::runtime::events::{EventType, Recorder, Reporter};
@@ -17,11 +16,7 @@ use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use uuid::Uuid;
 
-use trusted_cluster_operator_lib::endpoints::ATTESTATION_KEY_REGISTER_RESOURCE;
-use trusted_cluster_operator_lib::{
-    generate_owner_reference, get_trusted_execution_cluster, record_event, AttestationKey,
-    AttestationKeySpec,
-};
+use trusted_cluster_operator_lib::{endpoints::ATTESTATION_KEY_REGISTER_RESOURCE, *};
 
 #[derive(Parser)]
 #[command(name = "attestation-key-register")]
@@ -161,8 +156,7 @@ async fn handle_registration(
 
 #[tokio::main]
 async fn main() {
-    env_logger::Builder::from_env(Env::default().default_filter_or("info")).init();
-
+    env_logger_init();
     let args = Args::parse();
     let endpoint = format!("/{ATTESTATION_KEY_REGISTER_RESOURCE}");
     let err = "failed to create Kubernetes client";

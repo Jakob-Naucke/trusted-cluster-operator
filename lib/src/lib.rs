@@ -55,6 +55,10 @@ pub enum ControllerError {
     Anyhow(#[from] anyhow::Error),
 }
 
+pub fn env_logger_init() {
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+}
+
 pub fn controller_error_policy<R, E: Display, C>(_obj: Arc<R>, error: &E, _ctx: Arc<C>) -> Action {
     log::error!("{error}");
     Action::requeue(Duration::from_secs(60))
