@@ -8,7 +8,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
-use env_logger::Env;
 use futures_util::StreamExt;
 use k8s_openapi::api::apps::v1::Deployment;
 use k8s_openapi::api::core::v1::{ConfigMap, Secret};
@@ -19,10 +18,8 @@ use kube::runtime::watcher;
 use kube::{Api, Client};
 use log::{info, warn};
 
-use operator::OperatorContext;
-use operator::{generate_owner_reference, spawn_reflector, sync_cache, upsert_condition};
-use trusted_cluster_operator_lib::*;
-use trusted_cluster_operator_lib::{conditions::*, endpoints::*, images::*};
+use operator::*;
+use trusted_cluster_operator_lib::{conditions::*, endpoints::*, images::*, *};
 
 mod attestation_key_register;
 mod conditions;
@@ -34,7 +31,6 @@ mod register_server;
 mod test_utils;
 mod trustee;
 use crate::conditions::*;
-use operator::*;
 
 fn deployment_ready_timeout() -> Duration {
     let secs = std::env::var("DEPLOYMENT_READY_TIMEOUT_SECS")
@@ -614,7 +610,7 @@ async fn install_attestation_key_register(
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    env_logger::Builder::from_env(Env::default().default_filter_or("info")).init();
+    env_logger_init();
     let _ = jsonwebtoken_openssl::install_default();
     let mut config = kube::Config::infer().await?;
     config.read_timeout = Some(KUBE_READ_TIMEOUT);

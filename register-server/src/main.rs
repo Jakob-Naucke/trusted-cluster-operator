@@ -18,7 +18,6 @@ use clap::Parser;
 use clevis_pin_trustee_lib::{
     AttestationKey, Config as ClevisConfig, NumRetries, Registration, Server as ClevisServer,
 };
-use env_logger::Env;
 use ignition_config::v3_6::{
     Clevis, ClevisCustom, Config as IgnitionConfig, File, Filesystem, Luks, Resource, Storage,
     Systemd, Unit,
@@ -36,10 +35,7 @@ use log::{error, info};
 use std::net::SocketAddr;
 use uuid::Uuid;
 
-use trusted_cluster_operator_lib::endpoints::*;
-use trusted_cluster_operator_lib::{
-    generate_owner_reference, get_trusted_execution_cluster, record_event, Machine, MachineSpec,
-};
+use trusted_cluster_operator_lib::{endpoints::*, *};
 
 /// Allow for an operator::KUBE_READ_TIMEOUT to hit (5 minutes) plus one minute,
 /// thus 360s / 5s (clevis-pin-trustee's delay)
@@ -385,8 +381,7 @@ async fn create_machine(
 
 #[tokio::main]
 async fn main() {
-    env_logger::Builder::from_env(Env::default().default_filter_or("info")).init();
-
+    env_logger_init();
     let args = Args::parse();
     let endpoint = format!("/{REGISTER_SERVER_RESOURCE}");
     let err = "failed to create Kubernetes client";

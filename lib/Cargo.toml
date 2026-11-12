@@ -17,6 +17,7 @@ openshift = []
 anyhow.workspace = true
 blockdev.workspace = true
 compute-pcrs-lib.workspace = true
+env_logger.workspace = true
 hex.workspace = true
 k8s-openapi.workspace = true
 kube.workspace = true
