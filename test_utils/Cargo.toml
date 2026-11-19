@@ -17,7 +17,7 @@ virtualization = []
 anyhow.workspace = true
 async-trait = "0.1"
 auto_impl = "1"
-blockdev = { version = "0.4.2" }
+blockdev.workspace = true
 clevis-pin-trustee-lib.workspace = true
 chrono.workspace = true
 compute-pcrs-lib.workspace = true

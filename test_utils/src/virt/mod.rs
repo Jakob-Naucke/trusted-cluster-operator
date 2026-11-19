@@ -7,7 +7,6 @@ pub mod azure;
 pub mod kubevirt;
 
 use anyhow::{Context, Result, anyhow};
-use blockdev::{BlockDevice, BlockDevices, DeviceType};
 use clevis_pin_trustee_lib::Key as ClevisKey;
 use k8s_openapi::api::core::v1::Secret;
 use kube::{Api, Client};
@@ -176,18 +175,9 @@ pub trait NodeBackend: Send + Sync {
     async fn ssh_exec(&self, command: &str) -> Result<String>;
 
     async fn get_root_volume(&self) -> Result<String> {
-        let lsblk_cmd = "lsblk -J";
         let ctx = "Failed to get block devices from VM";
-        let blk_json = self.ssh_exec(lsblk_cmd).await.context(ctx)?;
-        let blkdevs: BlockDevices = serde_json::from_str(&blk_json)?;
-        let ctx = "No block device's child mounted at /sysroot";
-        let is_root = |m: &Option<String>| m.as_deref() == Some("/sysroot");
-        let has_root = |d: &BlockDevice| {
-            d.mountpoints.iter().any(is_root) && d.device_type == DeviceType::Crypt
-        };
-        let has_root_child = |d: &&BlockDevice| d.children.iter().flatten().any(has_root);
-        let dev = blkdevs.iter_all().find(has_root_child).context(ctx)?;
-        Ok(dev.name.clone())
+        let blk_json = self.ssh_exec("lsblk -J").await.context(ctx)?;
+        block_device::find_root_device(&blk_json)
     }
 
     async fn get_root_key(&self, client: Client, namespace: &str) -> Result<Vec<u8>> {

@@ -4937,6 +4937,7 @@ name = "trusted-cluster-operator-lib"
 version = "0.2.3"
 dependencies = [
  "anyhow",
+ "blockdev",
  "compute-pcrs-lib",
  "hex",
  "http",

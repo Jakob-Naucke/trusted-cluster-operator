@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: MIT
 
+pub mod block_device;
 pub mod conditions;
 pub mod endpoints;
 pub mod images;
