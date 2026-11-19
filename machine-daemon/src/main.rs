@@ -220,3 +220,226 @@ async fn patch_status(
         .map_err(Into::<anyhow::Error>::into)?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use http::{Method, Request, StatusCode};
+    use kube::api::ObjectMeta;
+    use trusted_cluster_operator_test_utils::mock_client::*;
+
+    const EXAMPLE_LINE: &str = r#"1: trustee '{"initdata":null,"num_retries":72,"path":"default/e29150dd-6f78-4393-b3e6-4c8e3d73a992/root","servers":[{"cert":"-----BEGIN CERTIFICATE-----\nMIID\n-----END CERTIFICATE-----\n","url":"https://131.189.209.120:8080"}]}'"#;
+
+    #[test]
+    fn parses_example_binding() {
+        let bindings = parse_bindings(EXAMPLE_LINE).unwrap();
+        assert_eq!(bindings.len(), 1);
+        let binding = &bindings[0];
+        assert_eq!(binding.slot, 1);
+        assert_eq!(binding.config.servers.len(), 1);
+        assert_eq!(
+            binding.config.servers[0].url,
+            "https://131.189.209.120:8080"
+        );
+        assert_eq!(
+            machine_uuid(&binding.config).unwrap(),
+            "e29150dd-6f78-4393-b3e6-4c8e3d73a992"
+        );
+        assert_eq!(
+            machine_name(&binding.config).unwrap(),
+            "machine-e29150dd-6f78-4393-b3e6-4c8e3d73a992"
+        );
+    }
+
+    #[test]
+    fn parses_multiple_bindings_and_skips_non_trustee_pins() {
+        let output = format!("0: tpm2 '{{\"pcr_bank\":\"sha256\"}}'\n{EXAMPLE_LINE}\n");
+        let bindings = parse_bindings(&output).unwrap();
+        assert_eq!(bindings.len(), 1);
+        assert_eq!(bindings[0].slot, 1);
+    }
+
+    #[test]
+    fn no_trustee_binding_is_empty() {
+        let bindings = parse_bindings("0: tpm2 '{\"pcr_bank\":\"sha256\"}'").unwrap();
+        assert!(bindings.is_empty());
+    }
+
+    #[test]
+    fn malformed_line_errors() {
+        assert!(parse_bindings("not a binding line").is_err());
+    }
+
+    fn config_with_servers(servers: Vec<(&str, &str)>) -> Config {
+        Config {
+            servers: servers
+                .into_iter()
+                .map(|(url, cert)| Server {
+                    url: url.to_string(),
+                    cert: cert.to_string(),
+                })
+                .collect(),
+            path: "default/some-uuid/root".to_string(),
+            initdata: None,
+            num_retries: None,
+            attestation_key: None,
+        }
+    }
+
+    #[test]
+    fn desired_config_replicates_machine_certs() {
+        let current = config_with_servers(vec![("https://kbs:8080", "cert-a")]);
+        let machine_certs = vec!["cert-a".to_string(), "cert-b".to_string()];
+        let desired = desired_config(&current, &machine_certs).unwrap();
+        assert_eq!(desired.servers.len(), 2);
+        assert!(desired.servers.iter().all(|s| s.url == "https://kbs:8080"));
+        assert!(servers_changed(&current, &desired));
+    }
+
+    #[test]
+    fn desired_config_replicates_duplicate_certs() {
+        let current = config_with_servers(vec![("https://kbs:8080", "cert-a")]);
+        let machine_certs = vec!["cert-a".to_string(), "cert-a".to_string()];
+        let desired = desired_config(&current, &machine_certs).unwrap();
+        assert_eq!(desired.servers.len(), 2);
+    }
+
+    #[test]
+    fn desired_config_unchanged_is_not_reported_changed() {
+        let current = config_with_servers(vec![("https://kbs:8080", "cert-a")]);
+        let machine_certs = vec!["cert-a".to_string()];
+        let desired = desired_config(&current, &machine_certs).unwrap();
+        assert!(!servers_changed(&current, &desired));
+    }
+
+    #[test]
+    fn desired_config_without_existing_servers_errors() {
+        let current = config_with_servers(vec![]);
+        assert!(desired_config(&current, &["cert-a".to_string()]).is_err());
+    }
+
+    fn dummy_servers(certs: &[&str]) -> Vec<Server> {
+        let make = |cert: &&str| Server {
+            url: "https://kbs:8080".to_string(),
+            cert: cert.to_string(),
+        };
+        certs.iter().map(make).collect()
+    }
+
+    fn dummy_machine(status: Option<MachineStatus>) -> Machine {
+        Machine {
+            metadata: ObjectMeta {
+                name: Some("machine-test".to_string()),
+                ..Default::default()
+            },
+            spec: MachineSpec {
+                id: "test".to_string(),
+                provider_id: None,
+            },
+            status,
+        }
+    }
+
+    /// Builds a Machine whose status already reflects the given reason and installed certs
+    fn machine_with_status(reason: &str, certs: &[&str]) -> Machine {
+        let condition = certs_updated_condition(reason, None, &None);
+        let get_hash = |s: &Server| cert_hash(&s.cert);
+        let installed_certs = dummy_servers(certs).iter().map(get_hash).collect();
+        dummy_machine(Some(MachineStatus {
+            conditions: Some(vec![condition]),
+            installed_certs: Some(installed_certs),
+        }))
+    }
+
+    #[tokio::test]
+    async fn patch_status_skips_when_unchanged() {
+        let clos = async |_, _| {
+            let machine = machine_with_status(CERTS_UPDATED_REASON, &["cert-a"]);
+            Ok(serde_json::to_string(&machine).unwrap())
+        };
+        count_check!(1, clos, |client| {
+            let machines = Api::default_namespaced(client);
+            let servers = dummy_servers(&["cert-a"]);
+            let result =
+                patch_status(&machines, "machine-test", CERTS_UPDATED_REASON, &servers).await;
+            assert!(result.is_ok());
+        });
+    }
+
+    #[tokio::test]
+    async fn patch_status_patches_when_reason_changed() {
+        let clos = async |req: Request<_>, ctr| match (ctr, req.method()) {
+            (0, &Method::GET) => {
+                let machine = machine_with_status(CERTS_UPDATED_REASON, &["cert-a"]);
+                Ok(serde_json::to_string(&machine).unwrap())
+            }
+            (1, &Method::PATCH) => {
+                let body = get_body_string(req).await;
+                assert!(body.contains(CERTS_UPDATING_REASON));
+                Ok(serde_json::to_string(&dummy_machine(None)).unwrap())
+            }
+            _ => panic!("unexpected API interaction: {req:?}, counter {ctr}"),
+        };
+        count_check!(2, clos, |client| {
+            let machines = Api::default_namespaced(client);
+            let servers = dummy_servers(&["cert-a"]);
+            let result =
+                patch_status(&machines, "machine-test", CERTS_UPDATING_REASON, &servers).await;
+            assert!(result.is_ok());
+        });
+    }
+
+    #[tokio::test]
+    async fn patch_status_patches_when_certs_changed() {
+        let clos = async |req: Request<_>, ctr| match (ctr, req.method()) {
+            (0, &Method::GET) => {
+                let machine = machine_with_status(CERTS_UPDATED_REASON, &["old-cert"]);
+                Ok(serde_json::to_string(&machine).unwrap())
+            }
+            (1, &Method::PATCH) => {
+                let body = get_body_string(req).await;
+                assert!(body.contains(&cert_hash("cert-a")));
+                Ok(serde_json::to_string(&dummy_machine(None)).unwrap())
+            }
+            _ => panic!("unexpected API interaction: {req:?}, counter {ctr}"),
+        };
+        count_check!(2, clos, |client| {
+            let machines = Api::default_namespaced(client);
+            let servers = dummy_servers(&["cert-a"]);
+            let result =
+                patch_status(&machines, "machine-test", CERTS_UPDATED_REASON, &servers).await;
+            assert!(result.is_ok());
+        });
+    }
+
+    #[tokio::test]
+    async fn patch_status_propagates_get_error() {
+        let clos = async |req: Request<_>, _| match req.method() {
+            &Method::GET => Err(StatusCode::INTERNAL_SERVER_ERROR),
+            _ => panic!("unexpected API interaction: {req:?}"),
+        };
+        count_check!(1, clos, |client| {
+            let machines = Api::default_namespaced(client);
+            let servers = dummy_servers(&["cert-a"]);
+            let result =
+                patch_status(&machines, "machine-test", CERTS_UPDATED_REASON, &servers).await;
+            assert!(result.is_err());
+        });
+    }
+
+    #[tokio::test]
+    async fn patch_status_propagates_patch_error() {
+        let clos = async |req: Request<_>, ctr| match (ctr, req.method()) {
+            (0, &Method::GET) => Ok(serde_json::to_string(&dummy_machine(None)).unwrap()),
+            (1, &Method::PATCH) => Err(StatusCode::INTERNAL_SERVER_ERROR),
+            _ => panic!("unexpected API interaction: {req:?}, counter {ctr}"),
+        };
+        count_check!(2, clos, |client| {
+            let machines = Api::default_namespaced(client);
+            let servers = dummy_servers(&["cert-a"]);
+            let result =
+                patch_status(&machines, "machine-test", CERTS_UPDATED_REASON, &servers).await;
+            assert!(result.is_err());
+        });
+    }
+}
