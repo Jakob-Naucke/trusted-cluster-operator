@@ -11,7 +11,7 @@ use anyhow::{Context, Result, anyhow};
 use futures_util::StreamExt;
 use k8s_openapi::api::apps::v1::Deployment;
 use k8s_openapi::api::core::v1::{ConfigMap, Secret};
-use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
+use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, OwnerReference};
 use kube::runtime::controller::{Action, Controller};
 use kube::runtime::reflector;
 use kube::runtime::watcher;
@@ -533,6 +533,27 @@ async fn install_trustee_configuration(
     let owner_reference = generate_owner_reference(cluster)?;
 
     let trustee_secret = &cluster.spec.trustee_secret;
+    install_trustee_resources(client.clone(), cluster, &owner_reference).await?;
+
+    let trustee_image = get_env(RELATED_IMAGE_TRUSTEE)?;
+    trustee::generate_kbs_deployment(client, owner_reference, &trustee_image, trustee_secret)
+        .await
+        .context("Failed to create the KBS deployment")?;
+    info!("Generated the KBS deployment");
+
+    Ok(())
+}
+
+/// Prepares the KBS configuration, auth Secret, and Service for an install or upgrade.
+/// Uses the client's default namespace, the cluster's KBS port, the supplied owner
+/// reference to create resources. Returns success once all three
+/// resources are ready for the Deployment to reference.
+async fn install_trustee_resources(
+    client: Client,
+    cluster: &TrustedExecutionCluster,
+    owner_reference: &OwnerReference,
+) -> Result<()> {
+    let trustee_secret = &cluster.spec.trustee_secret;
     trustee::generate_trustee_data(client.clone(), owner_reference.clone(), trustee_secret)
         .await
         .context("Failed to create the KBS configuration configmap")?;
@@ -547,12 +568,6 @@ async fn install_trustee_configuration(
         .await
         .context("Failed to create the KBS service")?;
     info!("Generated the KBS service");
-
-    let trustee_image = get_env(RELATED_IMAGE_TRUSTEE)?;
-    trustee::generate_kbs_deployment(client, owner_reference, &trustee_image, trustee_secret)
-        .await
-        .context("Failed to create the KBS deployment")?;
-    info!("Generated the KBS deployment");
 
     Ok(())
 }
