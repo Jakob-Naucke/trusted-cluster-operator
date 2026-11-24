@@ -546,3 +546,556 @@ pub fn registration_tls_args() -> [String; 4] {
         format!("{TLS_DIR}/tls.key"),
     ]
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use http::{Method, Request, StatusCode};
+    use k8s_openapi::ByteString;
+    use k8s_openapi::api::apps::v1::DeploymentStatus;
+    use kube::api::ObjectList;
+    use kube::client::Body;
+    use openssl::asn1::Asn1Time;
+    use openssl::hash::MessageDigest;
+    use openssl::pkey::{PKey, PKeyRef, Private};
+    use openssl::x509::{X509, X509Name};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicU32, Ordering},
+    };
+    use trusted_cluster_operator_lib::MachineStatus;
+    use trusted_cluster_operator_test_utils::mock_client::*;
+
+    /// Returns a short-lived test certificate for the given name and key.
+    /// Signs with the optional issuer and its key, or self-signs when absent.
+    fn certificate(
+        name: &str,
+        key: &PKeyRef<Private>,
+        issuer: Option<(&X509, &PKeyRef<Private>)>,
+    ) -> X509 {
+        let mut subject = X509Name::builder().unwrap();
+        subject.append_entry_by_text("CN", name).unwrap();
+        let subject = subject.build();
+        let mut cert = X509::builder().unwrap();
+        cert.set_subject_name(&subject).unwrap();
+        let (issuer_name, signing_key) = issuer
+            .map(|(cert, key)| (cert.subject_name(), key))
+            .unwrap_or((&subject, key));
+        cert.set_issuer_name(issuer_name).unwrap();
+        cert.set_pubkey(key).unwrap();
+        cert.set_not_before(&Asn1Time::days_from_now(0).unwrap())
+            .unwrap();
+        cert.set_not_after(&Asn1Time::days_from_now(1).unwrap())
+            .unwrap();
+        cert.sign(signing_key, MessageDigest::null()).unwrap();
+        cert.build()
+    }
+
+    /// Returns a named TLS Secret fixture with a generated key and self-signed
+    /// certificate to use as both the leaf and CA.
+    fn source_secret(name: &str) -> Secret {
+        let key = PKey::generate_ed25519().unwrap();
+        let cert = certificate(name, &key, None).to_pem().unwrap();
+        let data = BTreeMap::from([
+            ("ca.crt".to_string(), ByteString(cert.clone())),
+            ("tls.crt".to_string(), ByteString(cert)),
+            (
+                "tls.key".to_string(),
+                ByteString(key.private_key_to_pem_pkcs8().unwrap()),
+            ),
+        ]);
+        Secret {
+            metadata: ObjectMeta {
+                name: Some(name.to_string()),
+                resource_version: Some("9".to_string()),
+                ..Default::default()
+            },
+            data: Some(data),
+            type_: Some("kubernetes.io/tls".to_string()),
+            ..Default::default()
+        }
+    }
+
+    /// Returns a test TEC with Trustee TLS configured and its matching owner
+    /// reference for building related fixtures.
+    fn cluster_and_owner() -> (TrustedExecutionCluster, OwnerReference) {
+        let mut cluster = dummy_cluster();
+        cluster.spec.trustee_secret = Some("configured-tls".to_string());
+        let owner = operator::generate_owner_reference(&cluster).unwrap();
+        (cluster, owner)
+    }
+
+    /// Returns a fully rolled-out Deployment fixture for the given Deployment
+    /// and container names, mounted Secret, and optional TLS revision.
+    fn test_deployment(
+        name: &str,
+        container: &str,
+        secret: &str,
+        revision: Option<String>,
+    ) -> Deployment {
+        let (volume, mount) = tls_volume(secret);
+        serde_json::from_value(json!({
+            "metadata": { "name": name, "generation": 2, "resourceVersion": "13" },
+            "spec": {
+                "selector": {},
+                "template": {
+                    "metadata": { "annotations": revision.map(|revision| BTreeMap::from([(TLS_REVISION, revision)])) },
+                    "spec": {
+                        "containers": [{ "name": container, "volumeMounts": [mount] }],
+                        "volumes": [volume]
+                    }
+                }
+            },
+            "status": { "observedGeneration": 2, "replicas": 1, "updatedReplicas": 1, "availableReplicas": 1 }
+        })).unwrap()
+    }
+
+    /// Returns a rolled-out Trustee Deployment fixture annotated with the
+    /// supplied active managed Secret's revision.
+    fn trustee_deployment(active: &Secret) -> Deployment {
+        test_deployment(
+            TRUSTEE_DEPLOYMENT,
+            TRUSTEE_CONTAINER,
+            MANAGED_TRUSTEE_TLS,
+            Some(trustee_revision(active).unwrap()),
+        )
+    }
+
+    /// Returns a managed Secret fixture for the source Secret and TEC owner,
+    /// with a resource version for testing API replacements.
+    fn managed_copy(source: &Secret, owner: &OwnerReference) -> Secret {
+        let mut active = managed_secret(Secret::default(), source, owner);
+        active.metadata.resource_version = Some("18".to_string());
+        active
+    }
+
+    /// Returns a versioned `trustee-certs` ConfigMap fixture encoding the
+    /// supplied certificate state under the given TEC owner.
+    fn config_map(owner: &OwnerReference, certs: &TrusteeCerts) -> ConfigMap {
+        ConfigMap {
+            metadata: ObjectMeta {
+                name: Some(TRUSTEE_CERTS_CONFIG_MAP.to_string()),
+                owner_references: Some(vec![owner.clone()]),
+                resource_version: Some("17".to_string()),
+                ..Default::default()
+            },
+            data: Some(certs.to_config_map_data()),
+            ..Default::default()
+        }
+    }
+
+    /// Returns a Machine fixture for the supplied owner, with an installed
+    /// certificate hash when a CA is supplied.
+    fn machine(owner: &OwnerReference, ca: Option<&str>) -> Machine {
+        let mut machine = Machine::new(
+            "machine-1",
+            trusted_cluster_operator_lib::MachineSpec {
+                id: "1".to_string(),
+                provider_id: None,
+            },
+        );
+        machine.metadata.owner_references = Some(vec![owner.clone()]);
+        machine.status = ca.map(|ca| MachineStatus {
+            installed_certs: Some(vec![cert_hash(ca)]),
+            conditions: None,
+        });
+        machine
+    }
+
+    /// Serializes a fixture into a successful JSON response for the mock API.
+    fn to_json(value: &impl serde::Serialize) -> Result<String, StatusCode> {
+        Ok(serde_json::to_string(value).unwrap())
+    }
+
+    /// Checks that staging the same CA preserves its grace deadline and staging
+    /// a different CA resets it.
+    #[test]
+    fn grace_period_tracks_the_candidate_across_reconciles() {
+        let mut certs = TrusteeCerts::default();
+        let now = Utc::now();
+        let grace = 60;
+        let later = now + chrono::TimeDelta::seconds(15);
+        assert_eq!(
+            stage_ca(&mut certs, "old", "new", now, grace).unwrap(),
+            Duration::from_secs(60)
+        );
+        assert_eq!(
+            stage_ca(&mut certs, "old", "new", later, grace).unwrap(),
+            Duration::from_secs(45)
+        );
+        let deadline = now + chrono::TimeDelta::seconds(60);
+        assert!(
+            stage_ca(&mut certs, "old", "new", deadline, grace)
+                .unwrap()
+                .is_zero()
+        );
+        certs.revoked_certs.push("alternate".to_string());
+        assert_eq!(
+            stage_ca(&mut certs, "old", "alternate", deadline, grace).unwrap(),
+            Duration::from_secs(60)
+        );
+        assert!(certs.revoked_certs.is_empty());
+        revoke_other_certs(&mut certs, "alternate");
+        assert_eq!(certs.machine_certs, ["alternate"]);
+        assert_eq!(certs.revoked_certs, ["old", "new"]);
+        assert_eq!(certs.want_cert, None);
+        assert_eq!(certs.want_since, None);
+    }
+
+    /// Checks that the operator publishes both CAs before waiting for TEC-owned
+    /// Machines to report the requested CA.
+    #[tokio::test]
+    async fn publishes_both_cas_and_waits_for_owned_machines() {
+        let (cluster, owner) = cluster_and_owner();
+        let active = managed_copy(&source_secret("configured-tls"), &owner);
+        let desired = source_secret("configured-tls");
+        let deployment = trustee_deployment(&active);
+        let machines = ObjectList {
+            items: vec![machine(&owner, None)],
+            types: Default::default(),
+            metadata: Default::default(),
+        };
+        let state = (deployment, active, desired, machines);
+        let clos = move |req: Request<Body>, n| {
+            let (deployment, active, desired, machines) = state.clone();
+            async move {
+                match (req.method(), n) {
+                    (&Method::GET, 0) => to_json(&deployment),
+                    (&Method::GET, 1) => to_json(&active),
+                    (&Method::GET, 2) => Err(StatusCode::NOT_FOUND),
+                    (&Method::GET, 3) => to_json(&desired),
+                    (&Method::POST, 4) => {
+                        assert!(req.uri().path().ends_with("/configmaps"));
+                        let map: ConfigMap =
+                            serde_json::from_str(&get_body_string(req).await).unwrap();
+                        let certs =
+                            TrusteeCerts::from_config_map_data(map.data.as_ref().unwrap()).unwrap();
+                        let desired_ca = trustee_ca(&desired).unwrap();
+                        assert_eq!(
+                            certs.machine_certs,
+                            [trustee_ca(&active).unwrap(), desired_ca]
+                        );
+                        assert_eq!(certs.want_cert.as_deref(), Some(desired_ca));
+                        assert!(
+                            DateTime::parse_from_rfc3339(certs.want_since.as_deref().unwrap())
+                                .is_ok()
+                        );
+                        to_json(&map)
+                    }
+                    (&Method::GET, 5) => to_json(&machines),
+                    _ => panic!("unexpected request {n}: {req:?}"),
+                }
+            }
+        };
+        count_check!(6, clos, |client| {
+            let (reason, _) = reconcile_trustee(&client, &cluster, &owner).await.unwrap();
+            assert_eq!(reason, CERTS_ADDING_NEW_REASON);
+        });
+    }
+
+    /// Checks that Machine readiness, grace expiry, or an unchanged CA each
+    /// permits the managed Secret update and Trustee rollout.
+    #[tokio::test]
+    async fn cuts_over_when_machines_are_ready_grace_expires_or_ca_is_unchanged() {
+        for (expired, same_ca) in [(false, false), (true, false), (false, true)] {
+            let (mut cluster, owner) = cluster_and_owner();
+            if expired {
+                cluster.spec.cert_update_grace_period = Some(0);
+            }
+            let original = source_secret("old-tls");
+            let active = managed_copy(&original, &owner);
+            let mut desired = source_secret("configured-tls");
+            if same_ca {
+                let ca = X509::from_pem(secret_entry(&original, "ca.crt").unwrap()).unwrap();
+                let ca_key =
+                    PKey::private_key_from_pem(secret_entry(&original, "tls.key").unwrap())
+                        .unwrap();
+                let key = PKey::generate_ed25519().unwrap();
+                let leaf = certificate("renewed", &key, Some((&ca, &ca_key)));
+                desired.data = Some(BTreeMap::from([
+                    ("ca.crt".to_string(), ByteString(ca.to_pem().unwrap())),
+                    ("tls.crt".to_string(), ByteString(leaf.to_pem().unwrap())),
+                    (
+                        "tls.key".to_string(),
+                        ByteString(key.private_key_to_pem_pkcs8().unwrap()),
+                    ),
+                ]));
+            }
+            let deployment = trustee_deployment(&active);
+            let ca = trustee_ca(&desired).unwrap();
+            let deployed_secret = managed_copy(&desired, &owner);
+            let revision = trustee_revision(&deployed_secret).unwrap();
+            let machines = ObjectList {
+                items: vec![
+                    machine(&owner, Some(ca)),
+                    machine(&OwnerReference::default(), None),
+                ],
+                types: Default::default(),
+                metadata: Default::default(),
+            };
+            let wait_for_machines = !expired && !same_ca;
+            let promote = if wait_for_machines { 6 } else { 5 };
+            let state = (deployment, active, desired, machines, revision);
+            let clos = move |req: Request<Body>, n| {
+                let (deployment, active, desired, machines, revision) = state.clone();
+                async move {
+                    match (req.method(), n) {
+                        (&Method::GET, 0) => to_json(&deployment),
+                        (&Method::GET, 1) => to_json(&active),
+                        (&Method::GET, 2) => Err(StatusCode::NOT_FOUND),
+                        (&Method::GET, 3) => to_json(&desired),
+                        (&Method::POST, 4) => {
+                            let map: ConfigMap =
+                                serde_json::from_str(&get_body_string(req).await).unwrap();
+                            let certs =
+                                TrusteeCerts::from_config_map_data(map.data.as_ref().unwrap())
+                                    .unwrap();
+                            assert!(certs.revoked_certs.is_empty());
+                            assert_eq!(certs.machine_certs.len(), if same_ca { 1 } else { 2 });
+                            to_json(&map)
+                        }
+                        (&Method::GET, 5) if wait_for_machines => to_json(&machines),
+                        (&Method::PUT, n) if n == promote => {
+                            assert!(req.uri().path().ends_with(MANAGED_TRUSTEE_TLS));
+                            let secret: Secret =
+                                serde_json::from_str(&get_body_string(req).await).unwrap();
+                            assert!(secret.data == desired.data);
+                            assert_eq!(
+                                secret.metadata.resource_version,
+                                active.metadata.resource_version
+                            );
+                            to_json(&secret)
+                        }
+                        (&Method::PATCH, n) if n == promote + 1 => {
+                            let patch: serde_json::Value =
+                                serde_json::from_str(&get_body_string(req).await).unwrap();
+                            assert_eq!(
+                                patch["spec"]["template"]["metadata"]["annotations"][TLS_REVISION],
+                                revision
+                            );
+                            to_json(&deployment)
+                        }
+                        _ => panic!("unexpected request {n}: {req:?}"),
+                    }
+                }
+            };
+            let count = Arc::new(AtomicU32::new(0));
+            let client = MockClient::new(clos, "test".to_string(), count.clone()).into_client();
+            let (reason, action) = reconcile_trustee(&client, &cluster, &owner).await.unwrap();
+            assert_eq!(reason, CERTS_REVOKING_OLD_REASON);
+            assert_eq!(action, ROLLOUT_REQUEUE);
+            assert_eq!(count.load(Ordering::Acquire), promote + 2);
+        }
+    }
+
+    /// Checks that a restart after updating the Secret resumes the pending
+    /// rollout and that revocation waits until the rollout completes.
+    #[tokio::test]
+    async fn resumes_cutover_after_restart_and_revokes_only_after_rollout() {
+        for phase in 0..3 {
+            let (cluster, owner) = cluster_and_owner();
+            let old = source_secret("old-tls");
+            let desired = source_secret("configured-tls");
+            let managed = managed_copy(&desired, &owner);
+            let revision = trustee_revision(&managed).unwrap();
+            let old_ca = trustee_ca(&old).unwrap().to_string();
+            let new_ca = trustee_ca(&desired).unwrap().to_string();
+            let mut certs = TrusteeCerts::default();
+            stage_ca(
+                &mut certs,
+                &old_ca,
+                &new_ca,
+                Utc::now(),
+                DEFAULT_GRACE_SECONDS,
+            )
+            .unwrap();
+            let map = config_map(&owner, &certs);
+            let mut deployment = if phase == 0 {
+                trustee_deployment(&managed_copy(&old, &owner))
+            } else {
+                trustee_deployment(&managed)
+            };
+            if phase == 1 {
+                deployment.status = Some(DeploymentStatus {
+                    observed_generation: Some(1),
+                    ..Default::default()
+                });
+            }
+            let state = (deployment, managed, map, desired, revision, old_ca, new_ca);
+            let clos = move |req: Request<Body>, n| {
+                let (deployment, managed, map, desired, revision, old_ca, new_ca) = state.clone();
+                async move {
+                    match (req.method(), n) {
+                        (&Method::GET, 0) => to_json(&deployment),
+                        (&Method::GET, 1) => to_json(&managed),
+                        (&Method::GET, 2) => to_json(&map),
+                        (&Method::PATCH, 3) if phase == 0 => {
+                            let patch: serde_json::Value =
+                                serde_json::from_str(&get_body_string(req).await).unwrap();
+                            assert_eq!(
+                                patch["spec"]["template"]["metadata"]["annotations"][TLS_REVISION],
+                                revision
+                            );
+                            to_json(&deployment)
+                        }
+                        (&Method::GET, 3) if phase == 2 => to_json(&desired),
+                        (&Method::PUT, 4) if phase == 2 => {
+                            let map: ConfigMap =
+                                serde_json::from_str(&get_body_string(req).await).unwrap();
+                            let certs =
+                                TrusteeCerts::from_config_map_data(map.data.as_ref().unwrap())
+                                    .unwrap();
+                            assert_eq!(
+                                certs.machine_certs.as_slice(),
+                                std::slice::from_ref(&new_ca)
+                            );
+                            assert_eq!(
+                                certs.revoked_certs.as_slice(),
+                                std::slice::from_ref(&old_ca)
+                            );
+                            assert_eq!(certs.want_since, None);
+                            to_json(&map)
+                        }
+                        _ => panic!("unexpected request {n} in phase {phase}: {req:?}"),
+                    }
+                }
+            };
+            let count = Arc::new(AtomicU32::new(0));
+            let client = MockClient::new(clos, "test".to_string(), count.clone()).into_client();
+            let (reason, _) = reconcile_trustee(&client, &cluster, &owner).await.unwrap();
+            assert_eq!(
+                reason,
+                if phase == 2 {
+                    CERTS_UPDATED_REASON
+                } else {
+                    CERTS_REVOKING_OLD_REASON
+                }
+            );
+            assert_eq!(count.load(Ordering::Acquire), [4, 3, 5][phase]);
+        }
+    }
+
+    /// Checks that migration seeds the managed Secret from the live legacy
+    /// mount when the TEC already names a different source Secret.
+    #[tokio::test]
+    async fn adopts_the_legacy_mount_before_using_a_renamed_secret() {
+        let (_, owner) = cluster_and_owner();
+        let mut legacy = source_secret("legacy");
+        legacy
+            .data
+            .as_mut()
+            .unwrap()
+            .insert("ca.crt".to_string(), ByteString(b"invalid PEM".to_vec()));
+        let deployment = test_deployment(TRUSTEE_DEPLOYMENT, TRUSTEE_CONTAINER, "legacy", None);
+        let owner_for_api = owner.clone();
+        let clos = move |req: Request<Body>, n| {
+            let legacy = legacy.clone();
+            let owner_for_api = owner_for_api.clone();
+            async move {
+                match (req.method(), n) {
+                    (&Method::GET, 0) => {
+                        assert!(req.uri().path().ends_with(MANAGED_TRUSTEE_TLS));
+                        Err(StatusCode::NOT_FOUND)
+                    }
+                    (&Method::GET, 1) => {
+                        assert!(req.uri().path().ends_with("/secrets/legacy"));
+                        to_json(&legacy)
+                    }
+                    (&Method::POST, 2) => {
+                        let copy: Secret =
+                            serde_json::from_str(&get_body_string(req).await).unwrap();
+                        assert!(copy.data == legacy.data);
+                        assert_eq!(copy.annotations()[TLS_SOURCE], "legacy");
+                        assert!(owned_by(&copy.metadata, &owner_for_api));
+                        to_json(&copy)
+                    }
+                    _ => panic!("unexpected request {n}: {req:?}"),
+                }
+            }
+        };
+        count_check!(3, clos, |client| {
+            ensure_trustee_secret(&client, "configured-tls", Some(&deployment), &owner)
+                .await
+                .unwrap();
+        });
+    }
+
+    /// Checks that a Secret rename or in-place certificate update changes the
+    /// registration Pod template revision and preserves the container spec.
+    #[tokio::test]
+    async fn rolls_registration_on_secret_name_or_certificate_change() {
+        for (name, previous_secret) in [
+            ("attestation-key-register", "old-tls"),
+            ("register-server", "new-tls"),
+        ] {
+            let previous = source_secret(previous_secret);
+            let deployed_revision = tls_revision(&previous, previous_secret).unwrap();
+            let deployment = test_deployment(name, name, previous_secret, Some(deployed_revision));
+            let mut source = source_secret("new-tls");
+            source
+                .data
+                .as_mut()
+                .unwrap()
+                .insert("tls.key".to_string(), ByteString(b"invalid PEM".to_vec()));
+            let clos = move |req: Request<Body>, n| {
+                let deployment = deployment.clone();
+                let source = source.clone();
+                async move {
+                    match (req.method(), n) {
+                        (&Method::GET, 0) => to_json(&deployment),
+                        (&Method::GET, 1) => {
+                            assert!(req.uri().path().ends_with("/secrets/new-tls"));
+                            to_json(&source)
+                        }
+                        (&Method::PATCH, 2) => {
+                            let patch: serde_json::Value =
+                                serde_json::from_str(&get_body_string(req).await).unwrap();
+                            let pod = &patch["spec"]["template"]["spec"];
+                            assert!(pod.get("containers").is_none());
+                            assert_eq!(pod["volumes"][0]["name"], "serving-tls");
+                            assert_eq!(pod["volumes"][0]["secret"]["secretName"], "new-tls");
+                            assert_eq!(
+                                patch["spec"]["template"]["metadata"]["annotations"][TLS_REVISION],
+                                tls_revision(&source, "new-tls").unwrap()
+                            );
+                            to_json(&deployment)
+                        }
+                        _ => panic!("unexpected request {n}: {req:?}"),
+                    }
+                }
+            };
+            count_check!(3, clos, |client| {
+                reconcile_registration(&client, name, Some("new-tls"))
+                    .await
+                    .unwrap();
+            });
+        }
+    }
+
+    /// Checks that a Deployment whose mounted Secret and revision already match
+    /// the desired state receives no rollout patch.
+    #[tokio::test]
+    async fn unchanged_registration_certificate_does_not_roll_again() {
+        let name = "register-server";
+        let source = source_secret("current-tls");
+        let revision = tls_revision(&source, "current-tls").unwrap();
+        let deployment = test_deployment(name, name, "current-tls", Some(revision));
+        let state = (deployment, source);
+        let clos = move |req: Request<Body>, n| {
+            let (deployment, source) = state.clone();
+            async move {
+                match (req.method(), n) {
+                    (&Method::GET, 0) => to_json(&deployment),
+                    (&Method::GET, 1) => to_json(&source),
+                    _ => panic!("unexpected request {n}: {req:?}"),
+                }
+            }
+        };
+        count_check!(2, clos, |client| {
+            reconcile_registration(&client, name, Some("current-tls"))
+                .await
+                .unwrap();
+        });
+    }
+}

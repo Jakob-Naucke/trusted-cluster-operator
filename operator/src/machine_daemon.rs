@@ -118,3 +118,51 @@ pub async fn reconcile(client: &Client, owner: OwnerReference, image: &str) -> R
         .await?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Checks that the generated DaemonSet selects labeled Linux nodes and grants
+    /// the daemon the host access it needs.
+    #[test]
+    fn schedules_privileged_daemon_on_labeled_linux_nodes() {
+        let owner = OwnerReference::default();
+        let ds = daemon_set(owner.clone(), "machine-daemon:test");
+        assert_eq!(ds.metadata.owner_references, Some(vec![owner]));
+
+        let spec = ds.spec.unwrap();
+        assert_eq!(
+            spec.selector.match_labels,
+            spec.template.metadata.unwrap().labels
+        );
+        let pod = spec.template.spec.unwrap();
+        assert_eq!(
+            pod.service_account_name.as_deref(),
+            Some(MACHINE_DAEMON_NAME)
+        );
+        assert_eq!(pod.node_selector.unwrap()["kubernetes.io/os"], "linux");
+        let node_affinity = pod.affinity.unwrap().node_affinity.unwrap();
+        let selector = node_affinity
+            .required_during_scheduling_ignored_during_execution
+            .unwrap();
+        let terms = &selector.node_selector_terms;
+        assert_eq!(terms.len(), 1);
+        let labels = terms[0].match_expressions.as_ref().unwrap();
+        assert_eq!(labels.len(), 1);
+        assert_eq!(labels[0].key, MACHINE_NODE_LABEL);
+        assert_eq!(labels[0].operator, "Exists");
+
+        let daemon = &pod.containers[0];
+        assert_eq!(daemon.image.as_deref(), Some("machine-daemon:test"));
+        assert_eq!(
+            daemon.security_context.as_ref().unwrap().privileged,
+            Some(true)
+        );
+        let mount = &daemon.volume_mounts.as_ref().unwrap()[0];
+        assert_eq!(mount.mount_path, MACHINE_DAEMON_HOST_ROOT);
+        let volumes = pod.volumes.unwrap();
+        assert_eq!(mount.name, volumes[0].name);
+        assert_eq!(volumes[0].host_path.as_ref().unwrap().path, "/");
+    }
+}
