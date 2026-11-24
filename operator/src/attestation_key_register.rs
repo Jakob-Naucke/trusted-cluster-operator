@@ -29,10 +29,11 @@ use trusted_cluster_operator_lib::{
 };
 
 use crate::conditions::{attestation_key_approved_condition, machine_ak_approved_condition};
+use crate::tls::registration_tls_args;
 use crate::trustee;
 use operator::{
-    ControllerError, KIND_LABEL_KEY, LONG_REQUEUE, OperatorContext, TLS_DIR,
-    controller_error_policy, create_or_info_if_exists, patch_status_condition, read_certificate,
+    ControllerError, KIND_LABEL_KEY, LONG_REQUEUE, OperatorContext, controller_error_policy,
+    create_or_info_if_exists, patch_status_condition, read_certificate,
 };
 
 const INTERNAL_ATTESTATION_KEY_REGISTER_PORT: i32 = 8001;
@@ -53,10 +54,7 @@ pub async fn create_attestation_key_register_deployment(
     ];
     let volumes = read_certificate(client.clone(), secret).await?;
     if volumes.is_some() {
-        args.push("--cert-path".to_string());
-        args.push(format!("{TLS_DIR}/tls.crt"));
-        args.push("--key-path".to_string());
-        args.push(format!("{TLS_DIR}/tls.key"));
+        args.extend(registration_tls_args());
     }
 
     let deployment = Deployment {

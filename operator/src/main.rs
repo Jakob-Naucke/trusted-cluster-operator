@@ -29,6 +29,7 @@ mod reference_values;
 mod register_server;
 #[cfg(test)]
 mod test_utils;
+mod tls;
 mod trustee;
 use crate::conditions::*;
 

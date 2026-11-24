@@ -26,6 +26,7 @@ use log::{info, warn};
 use std::{collections::BTreeMap, sync::Arc};
 
 use crate::conditions::machine_key_provisioned_condition;
+use crate::tls::registration_tls_args;
 use crate::trustee;
 use operator::*;
 use trusted_cluster_operator_lib::{Machine, endpoints::*, record_event};
@@ -47,10 +48,7 @@ pub async fn create_register_server_deployment(
     let mut args = vec!["--port".to_string(), REGISTER_SERVER_PORT.to_string()];
     let volumes = read_certificate(client.clone(), secret).await?;
     if volumes.is_some() {
-        args.push("--cert-path".to_string());
-        args.push(format!("{TLS_DIR}/tls.crt"));
-        args.push("--key-path".to_string());
-        args.push(format!("{TLS_DIR}/tls.key"));
+        args.extend(registration_tls_args());
     }
 
     let deployment = Deployment {
