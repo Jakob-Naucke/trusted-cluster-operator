@@ -29,7 +29,7 @@ use trusted_cluster_operator_lib::{
 };
 
 use crate::conditions::{attestation_key_approved_condition, machine_ak_approved_condition};
-use crate::tls::registration_tls_args;
+use crate::tls::{registration_tls_args, tls_volume};
 use crate::trustee;
 use operator::{
     ControllerError, KIND_LABEL_KEY, LONG_REQUEUE, OperatorContext, controller_error_policy,
@@ -52,7 +52,9 @@ pub async fn create_attestation_key_register_deployment(
         "--port".to_string(),
         ATTESTATION_KEY_REGISTER_PORT.to_string(),
     ];
-    let volumes = read_certificate(client.clone(), secret).await?;
+    let volumes = read_certificate(client.clone(), secret)
+        .await?
+        .map(tls_volume);
     if volumes.is_some() {
         args.extend(registration_tls_args());
     }

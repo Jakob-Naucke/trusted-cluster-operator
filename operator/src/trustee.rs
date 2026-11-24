@@ -34,6 +34,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::tls::tls_volume;
 use compute_pcrs_lib::tpmevents::combine::combine_images;
 use operator::{ControllerError, OperatorContext, TLS_DIR, controller_error_policy};
 use operator::{controller_info, create_or_info_if_exists, read_certificate};
@@ -678,7 +679,7 @@ async fn build_kbs_deployment(
         "app".to_string(),
         TRUSTEE_APP_LABEL.to_string(),
     )]));
-    let tls_volumes = read_certificate(client, secret).await?;
+    let tls_volumes = read_certificate(client, secret).await?.map(tls_volume);
     let pod_spec = generate_kbs_pod_spec(image, tls_volumes);
 
     Ok(Deployment {

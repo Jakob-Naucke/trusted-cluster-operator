@@ -11,7 +11,7 @@
 use anyhow::{Result, anyhow};
 use futures_util::StreamExt;
 use k8s_openapi::api::apps::v1::Deployment;
-use k8s_openapi::api::core::v1::{ConfigMap, Secret, SecretVolumeSource, Volume, VolumeMount};
+use k8s_openapi::api::core::v1::{ConfigMap, Secret};
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, Time};
 use k8s_openapi::jiff::Timestamp;
 use kube::runtime::events::{Recorder, Reporter};
@@ -124,17 +124,17 @@ where
 pub const KIND_LABEL_KEY: &str = "kind";
 pub const TLS_DIR: &str = "/etc/tls";
 
-/// Reads a TLS certificate secret and returns the Volume and VolumeMount for it.
-/// Returns None if the secret name is not provided or the secret does not exist.
+/// Returns the configured TLS Secret name when the Secret can be read.
+/// Returns None if the name is unset or the Secret cannot be read.
 pub async fn read_certificate(
     client: Client,
     secret_name: &Option<String>,
-) -> Result<Option<(Volume, VolumeMount)>> {
+) -> Result<Option<&str>> {
     let secrets: Api<Secret> = Api::default_namespaced(client.clone());
     if secret_name.is_none() {
         return Ok(None);
     }
-    let secret_name = secret_name.as_ref().unwrap();
+    let secret_name = secret_name.as_deref().unwrap();
     let secret = secrets.get(secret_name).await;
 
     if secret.is_err() {
@@ -142,20 +142,7 @@ pub async fn read_certificate(
         return Ok(None);
     }
 
-    let volume = Volume {
-        name: secret_name.clone(),
-        secret: Some(SecretVolumeSource {
-            secret_name: Some(secret_name.clone()),
-            ..Default::default()
-        }),
-        ..Default::default()
-    };
-    let volume_mount = VolumeMount {
-        name: secret_name.clone(),
-        mount_path: TLS_DIR.to_string(),
-        ..Default::default()
-    };
-    Ok(Some((volume, volume_mount)))
+    Ok(Some(secret_name))
 }
 
 pub fn spawn_reflector<K>(writer: reflector::store::Writer<K>, client: Client, name: &'static str)

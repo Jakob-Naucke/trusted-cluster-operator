@@ -26,7 +26,7 @@ use log::{info, warn};
 use std::{collections::BTreeMap, sync::Arc};
 
 use crate::conditions::machine_key_provisioned_condition;
-use crate::tls::registration_tls_args;
+use crate::tls::{registration_tls_args, tls_volume};
 use crate::trustee;
 use operator::*;
 use trusted_cluster_operator_lib::{Machine, endpoints::*, record_event};
@@ -46,7 +46,9 @@ pub async fn create_register_server_deployment(
     let labels = BTreeMap::from([("app".to_string(), REGISTER_SERVER_APP_LABEL.to_string())]);
 
     let mut args = vec!["--port".to_string(), REGISTER_SERVER_PORT.to_string()];
-    let volumes = read_certificate(client.clone(), secret).await?;
+    let volumes = read_certificate(client.clone(), secret)
+        .await?
+        .map(tls_volume);
     if volumes.is_some() {
         args.extend(registration_tls_args());
     }
