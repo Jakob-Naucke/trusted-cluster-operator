@@ -726,6 +726,22 @@ mod tests {
     use crate::test_utils::{store_with, with_related_images};
     use trusted_cluster_operator_test_utils::mock_client::*;
 
+    // Compatibility paths that can be removed after 0.5.
+    // - Backfill labels on legacy AttestationKey Secrets in
+    //   `attestation_key_register::ensure_secret_label`.
+    #[test]
+    fn test_operator_version_below_0_5() {
+        let version = env!("CARGO_PKG_VERSION");
+        let mut parts = version.split('.');
+        let parse = |p: Option<&str>| p.and_then(|p| p.parse::<u32>().ok()).unwrap_or(0);
+        let major = parse(parts.next());
+        let minor = parse(parts.next());
+        assert!(
+            major == 0 && minor <= 5,
+            "operator version {version} is greater than 0.5, review comments above this test to remove compatibility paths"
+        );
+    }
+
     fn make_deployment(name: &str, image_tag: &str) -> Deployment {
         use k8s_openapi::api::apps::v1::DeploymentSpec;
         use k8s_openapi::api::core::v1::{Container, PodSpec, PodTemplateSpec};
