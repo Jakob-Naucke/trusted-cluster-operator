@@ -26,10 +26,10 @@ use log::{info, warn};
 use std::{collections::BTreeMap, sync::Arc};
 
 use crate::conditions::machine_key_provisioned_condition;
-use crate::tls::{registration_tls_args, tls_volume};
+use crate::tls::{registration_tls, registration_tls_args};
 use crate::trustee;
 use operator::*;
-use trusted_cluster_operator_lib::{Machine, endpoints::*, record_event};
+use trusted_cluster_operator_lib::{*, endpoints::*};
 
 /// Finalizer name to discard decryption keys when a machine is deleted
 const MACHINE_FINALIZER: &str = "finalizer.machine.trusted-execution-clusters.io";
@@ -46,10 +46,8 @@ pub async fn create_register_server_deployment(
     let labels = BTreeMap::from([("app".to_string(), REGISTER_SERVER_APP_LABEL.to_string())]);
 
     let mut args = vec!["--port".to_string(), REGISTER_SERVER_PORT.to_string()];
-    let volumes = read_certificate(client.clone(), secret)
-        .await?
-        .map(tls_volume);
-    if volumes.is_some() {
+    let tls = registration_tls(&client, secret).await?;
+    if tls.is_some() {
         args.extend(registration_tls_args());
     }
 
@@ -68,6 +66,9 @@ pub async fn create_register_server_deployment(
             template: PodTemplateSpec {
                 metadata: Some(ObjectMeta {
                     labels: Some(labels.clone()),
+                    annotations: tls.as_ref().map(|(_, _, revision)| {
+                        BTreeMap::from([(TLS_REVISION.to_string(), revision.clone())])
+                    }),
                     ..Default::default()
                 }),
                 spec: Some(PodSpec {
@@ -80,10 +81,10 @@ pub async fn create_register_server_deployment(
                             ..Default::default()
                         }]),
                         args: Some(args),
-                        volume_mounts: volumes.as_ref().map(|(_, vm)| vec![vm.clone()]),
+                        volume_mounts: tls.as_ref().map(|(_, mount, _)| vec![mount.clone()]),
                         ..Default::default()
                     }],
-                    volumes: volumes.as_ref().map(|(v, _)| vec![v.clone()]),
+                    volumes: tls.map(|(volume, _, _)| vec![volume]),
                     ..Default::default()
                 }),
             },

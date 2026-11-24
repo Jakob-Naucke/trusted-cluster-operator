@@ -6,7 +6,24 @@ For production environments, this is strongly recommended.
 When TLS authentication is enabled, the operator assumes secrets shaped like the ones issued by [cert-manager](https://cert-manager.io/), i.e. containing a `tls.key`, `tls.crt`, and `ca.crt`.
 The latter are only required in the Trustee and AK registration secrets, where register-server uses them to provide certificates for these endpoints.
 
-Updating certificates is **not** yet supported.
+## Updating certificates
+
+Update the configured Trustee Secret in place or point `spec.trusteeSecret` to a new
+Secret. When the CA changes, the operator publishes both CAs in the `trustee-certs`
+ConfigMap and waits for managed Machines to report the new CA. Trustee switches
+after every Machine reports it or `spec.certUpdateGracePeriod` expires. The grace
+period is in seconds and defaults to 86400 (24 hours). After the Trustee Deployment
+finishes rolling out, the operator marks the old CA revoked.
+
+Label managed Linux nodes with `trusted-execution-clusters.io/machine` so the
+machine DaemonSet can update their Clevis configuration. After upgrading from a
+release that mounted the configured Trustee Secret directly, wait for Trustee to
+mount the operator-managed `trustee-serving-tls` Secret before editing the
+configured Secret in place.
+
+To rotate a registration server's certificate, update its Secret in place or
+point `spec.registerServerSecret` or `spec.attestationKeyRegisterSecret` to a
+new Secret. The operator rolls out the affected Deployment directly.
 
 ## Creating secrets
 

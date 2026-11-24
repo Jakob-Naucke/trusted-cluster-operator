@@ -37,9 +37,7 @@ use std::time::Duration;
 use compute_pcrs_lib::tpmevents::combine::combine_images;
 use operator::{ControllerError, OperatorContext, TLS_DIR, controller_error_policy};
 use operator::{controller_info, create_or_info_if_exists};
-use trusted_cluster_operator_lib::conditions::COMMITTED_CONDITION;
-use trusted_cluster_operator_lib::reference_values::status_to_tpm_events;
-use trusted_cluster_operator_lib::{ApprovedImage, ApprovedImageStatusPcrs, endpoints::*};
+use trusted_cluster_operator_lib::{conditions::*, endpoints::*, reference_values::*, *};
 
 const TRUSTEE_DATA_DIR: &str = "/etc/kbs";
 const KBS_CONFIG_FILE: &str = "kbs-config.toml";
@@ -177,6 +175,20 @@ fn get_kbs_connection(ctx: &OperatorContext) -> Result<(String, Vec<String>)> {
     let namespace = ctx.client.default_namespace();
 
     if let Some(configured) = &tec.spec.trustee_secret {
+        use trusted_cluster_operator_lib::trustee_certs::{TRUSTEE_CERTS_CONFIG_MAP, TrusteeCerts};
+
+        let mut certs = match ctx
+            .cm_store
+            .get(&ObjectRef::new(TRUSTEE_CERTS_CONFIG_MAP).within(namespace))
+        {
+            Some(map) => {
+                TrusteeCerts::from_config_map_data(
+                    map.data.as_ref().context("trustee-certs has no data")?,
+                )?
+                .machine_certs
+            }
+            None => Vec::new(),
+        };
         let deployment = ctx
             .deployment_store
             .get(&ObjectRef::new(TRUSTEE_DEPLOYMENT).within(namespace));
@@ -187,11 +199,16 @@ fn get_kbs_connection(ctx: &OperatorContext) -> Result<(String, Vec<String>)> {
                 .unwrap_or(configured),
             None => configured,
         };
-        let secret = ctx
+        let active = ctx
             .secret_store
-            .get(&ObjectRef::new(source_name).within(namespace))
-            .with_context(|| format!("Trustee Secret {source_name} is missing"))?;
-        let ca = crate::tls::trustee_ca(&secret)?;
+            .get(&ObjectRef::new(source_name).within(namespace));
+        if let Some(secret) = active {
+            let ca = crate::tls::trustee_ca(&secret)?;
+            if !certs.iter().any(|cert| cert == ca) {
+                certs.push(ca.to_string());
+            }
+        }
+        anyhow::ensure!(!certs.is_empty(), "No Trustee CA certificate is available");
         let trustee_addr = format!(
             "https://{}",
             tec.spec
@@ -199,7 +216,7 @@ fn get_kbs_connection(ctx: &OperatorContext) -> Result<(String, Vec<String>)> {
                 .as_ref()
                 .context("TrustedExecutionCluster missing public_trustee_addr HTTPS")?
         );
-        return Ok((trustee_addr, vec![ca.to_string()]));
+        return Ok((trustee_addr, certs));
     }
 
     Ok((
@@ -677,12 +694,15 @@ fn build_kbs_deployment(
     owner_reference: OwnerReference,
     image: &str,
     tls_volumes: Option<(Volume, VolumeMount)>,
+    tls_revision: Option<String>,
 ) -> Deployment {
     let selector = Some(BTreeMap::from([(
         "app".to_string(),
         TRUSTEE_APP_LABEL.to_string(),
     )]));
     let pod_spec = generate_kbs_pod_spec(image, tls_volumes);
+    let annotations = tls_revision
+        .map(|revision| BTreeMap::from([(TLS_REVISION.to_string(), revision)]));
 
     Deployment {
         metadata: ObjectMeta {
@@ -708,6 +728,7 @@ fn build_kbs_deployment(
             template: PodTemplateSpec {
                 metadata: Some(ObjectMeta {
                     labels: selector,
+                    annotations,
                     ..Default::default()
                 }),
                 spec: Some(pod_spec),
@@ -724,8 +745,9 @@ pub async fn generate_kbs_deployment(
     owner_reference: OwnerReference,
     image: &str,
     tls_volumes: Option<(Volume, VolumeMount)>,
+    tls_revision: Option<String>,
 ) -> Result<()> {
-    let deployment = build_kbs_deployment(owner_reference, image, tls_volumes);
+    let deployment = build_kbs_deployment(owner_reference, image, tls_volumes, tls_revision);
     create_or_info_if_exists(client, &deployment).await
 }
 
@@ -737,7 +759,7 @@ pub async fn apply_kbs_deployment(
     image: &str,
     tls_volumes: Option<(Volume, VolumeMount)>,
 ) -> Result<()> {
-    let deployment = build_kbs_deployment(owner_reference, image, tls_volumes);
+    let deployment = build_kbs_deployment(owner_reference, image, tls_volumes, None);
     let deployments: Api<Deployment> = Api::default_namespaced(client);
     deployments
         .patch(
@@ -1027,13 +1049,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_generate_kbs_depl_success() {
-        let clos = |client| generate_kbs_deployment(client, Default::default(), "image", None);
+        let clos =
+            |client| generate_kbs_deployment(client, Default::default(), "image", None, None);
         test_create_success::<_, _, Deployment>(clos).await;
     }
 
     #[tokio::test]
     async fn test_generate_kbs_depl_error() {
-        let clos = |client| generate_kbs_deployment(client, Default::default(), "image", None);
+        let clos =
+            |client| generate_kbs_deployment(client, Default::default(), "image", None, None);
         test_error_method!(clos, Method::POST);
     }
 

@@ -26,9 +26,12 @@ var (
 )
 
 // +kubebuilder:rbac:groups="",resources=configmaps;services;secrets,verbs=create;get;list;patch;watch
+// +kubebuilder:rbac:groups="",resources=configmaps,resourceNames=trustee-certs,verbs=update
+// +kubebuilder:rbac:groups="",resources=secrets,resourceNames=trustee-serving-tls,verbs=update
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list
 // +kubebuilder:rbac:groups="",resources=nodes,verbs=get;list;patch;update;watch
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=create;delete;get;list;patch;update;watch
+// +kubebuilder:rbac:groups=apps,resources=daemonsets,verbs=create;get;list;patch;watch
 // +kubebuilder:rbac:groups=batch,resources=jobs,verbs=create;delete;get;list;patch;update;watch
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=networkpolicies,verbs=create;delete;patch;update
 // +kubebuilder:rbac:groups=trusted-execution-clusters.io,resources=trustedexecutionclusters;machines;approvedimages;attestationkeys,verbs=create;delete;get;list;patch;update;watch
@@ -61,18 +64,21 @@ type TrustedExecutionClusterSpec struct {
 
 	// Secret with tls.{crt,key}, ca.crt for attestation-key-register
 	// +optional
-	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="Value is immutable"
 	AttestationKeyRegisterSecret *string `json:"attestationKeyRegisterSecret"`
 
 	// Secret with tls.{crt,key} for register-server
 	// +optional
-	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="Value is immutable"
 	RegisterServerSecret *string `json:"registerServerSecret"`
 
 	// Secret with tls.{crt,key}, ca.crt for Trustee
 	// +optional
-	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="Value is immutable"
 	TrusteeSecret *string `json:"trusteeSecret"`
+
+	// Maximum number of seconds to wait for machines to install the new Trustee CA.
+	// +optional
+	// +kubebuilder:default=86400
+	// +kubebuilder:validation:Minimum=0
+	CertUpdateGracePeriod *int32 `json:"certUpdateGracePeriod,omitempty"`
 
 	// Address where attester can connect to Trustee
 	// +optional

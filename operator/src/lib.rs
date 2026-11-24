@@ -124,27 +124,6 @@ where
 pub const KIND_LABEL_KEY: &str = "kind";
 pub const TLS_DIR: &str = "/etc/tls";
 
-/// Returns the configured TLS Secret name when the Secret can be read.
-/// Returns None if the name is unset or the Secret cannot be read.
-pub async fn read_certificate(
-    client: Client,
-    secret_name: &Option<String>,
-) -> Result<Option<&str>> {
-    let secrets: Api<Secret> = Api::default_namespaced(client.clone());
-    if secret_name.is_none() {
-        return Ok(None);
-    }
-    let secret_name = secret_name.as_deref().unwrap();
-    let secret = secrets.get(secret_name).await;
-
-    if secret.is_err() {
-        warn!("Certificate secret {secret_name} was provided, but could not be retrieved");
-        return Ok(None);
-    }
-
-    Ok(Some(secret_name))
-}
-
 pub fn spawn_reflector<K>(writer: reflector::store::Writer<K>, client: Client, name: &'static str)
 where
     K: Resource<Scope = k8s_openapi::NamespaceResourceScope>,

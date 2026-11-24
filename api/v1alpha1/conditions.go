@@ -48,4 +48,8 @@ const (
 	CertsUpdatedReason      string = "Updated"
 	CertsUpdatingReason     string = "Updating"
 	CertsUpdateFailedReason string = "Failed"
+
+	// Conditions for the TEC's Trustee certificate rollout
+	CertsAddingNewReason   string = "AddingNew"
+	CertsRevokingOldReason string = "RevokingOld"
 )

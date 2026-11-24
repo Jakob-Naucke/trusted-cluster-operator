@@ -186,6 +186,7 @@ pub fn dummy_cluster() -> TrustedExecutionCluster {
             public_trustee_addr: Some("::".to_string()),
             register_server_secret: None,
             trustee_secret: None,
+            cert_update_grace_period: None,
             attestation_key_register_secret: None,
             register_server_port: None,
             trustee_kbs_port: None,

@@ -45,3 +45,5 @@ pub const CERTS_UPDATED_CONDITION: &str = "CertsUpdated";
 pub const CERTS_UPDATED_REASON: &str = "Updated";
 pub const CERTS_UPDATING_REASON: &str = "Updating";
 pub const CERTS_UPDATE_FAILED_REASON: &str = "Failed";
+pub const CERTS_ADDING_NEW_REASON: &str = "AddingNew";
+pub const CERTS_REVOKING_OLD_REASON: &str = "RevokingOld";

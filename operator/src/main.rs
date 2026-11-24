@@ -9,13 +9,13 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
 use futures_util::StreamExt;
-use k8s_openapi::api::apps::v1::Deployment;
+use k8s_openapi::api::apps::v1::{DaemonSet, Deployment};
 use k8s_openapi::api::core::v1::{ConfigMap, Secret};
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, OwnerReference};
 use kube::runtime::controller::{Action, Controller};
-use kube::runtime::reflector;
+use kube::runtime::reflector::{self, ObjectRef};
 use kube::runtime::watcher;
-use kube::{Api, Client};
+use kube::{Api, Client, ResourceExt};
 use log::{info, warn};
 
 use operator::*;
@@ -23,6 +23,7 @@ use trusted_cluster_operator_lib::{conditions::*, endpoints::*, images::*, *};
 
 mod attestation_key_register;
 mod conditions;
+mod machine_daemon;
 #[cfg(feature = "openshift")]
 mod openshift_images;
 mod reference_values;
@@ -178,9 +179,9 @@ async fn handle_upgrade(
         .as_ref()
         .and_then(|s| s.observed_operator_version.as_deref());
 
+    // Reconcile the daemon and TLS settings after install or upgrade is complete.
     if observed == Some(COMPONENT_VERSION) {
-        tls::migrate_trustee_secret(&ctx.client, cluster).await?;
-        return Ok(Some(LONG_REQUEUE));
+        return Ok(Some(reconcile_tls(ctx, cluster, state, conditions).await?));
     }
 
     // A previous upgrade failed and requires manual intervention;
@@ -254,6 +255,46 @@ async fn handle_upgrade(
     };
     update_status!(clusters, name, status)?;
     Ok(Some(LONG_REQUEUE))
+}
+
+async fn reconcile_tls(
+    ctx: &OperatorContext,
+    cluster: &TrustedExecutionCluster,
+    state: &ReconcileState,
+    conditions: &mut Option<Vec<Condition>>,
+) -> Result<Action> {
+    let owner = generate_owner_reference(cluster)?;
+    let image = get_env(RELATED_IMAGE_MACHINE_DAEMON)?;
+    machine_daemon::reconcile(&ctx.client, owner.clone(), &image).await?;
+
+    let (trustee, registration, ak_registration) = tokio::join!(
+        tls::reconcile_trustee(&ctx.client, cluster, &owner),
+        tls::reconcile_registration(
+            &ctx.client,
+            REGISTER_SERVER_DEPLOYMENT,
+            cluster.spec.register_server_secret.as_deref(),
+        ),
+        tls::reconcile_registration(
+            &ctx.client,
+            ATTESTATION_KEY_REGISTER_DEPLOYMENT,
+            cluster.spec.attestation_key_register_secret.as_deref(),
+        ),
+    );
+    let (reason, action) = trustee.context("Failed to reconcile Trustee TLS")?;
+    if upsert_condition(conditions, certs_condition(cluster, reason)) {
+        let clusters: Api<TrustedExecutionCluster> = Api::default_namespaced(ctx.client.clone());
+        update_status!(
+            clusters,
+            &state.name,
+            TrustedExecutionClusterStatus {
+                conditions: conditions.clone(),
+                observed_operator_version: Some(COMPONENT_VERSION.to_string()),
+            }
+        )?;
+    }
+    registration.context("Failed to reconcile register-server TLS")?;
+    ak_registration.context("Failed to reconcile attestation-key-register TLS")?;
+    Ok(action)
 }
 
 /// Performs a fresh install of the operator-managed components for a newly created cluster.
@@ -532,15 +573,24 @@ async fn install_trustee_configuration(
     cluster: &TrustedExecutionCluster,
 ) -> Result<()> {
     let owner_reference = generate_owner_reference(cluster)?;
-    let tls_volumes = match cluster.spec.trustee_secret.as_deref() {
+    let (tls_volumes, tls_revision) = match cluster.spec.trustee_secret.as_deref() {
         Some(configured) => {
             let deployments: Api<Deployment> = Api::default_namespaced(client.clone());
             let deployment = deployments.get_opt(TRUSTEE_DEPLOYMENT).await?;
-            tls::ensure_trustee_secret(&client, configured, deployment.as_ref(), &owner_reference)
-                .await?;
-            Some(tls::tls_volume(tls::MANAGED_TRUSTEE_TLS))
+            let secret = tls::ensure_trustee_secret(
+                &client,
+                configured,
+                deployment.as_ref(),
+                &owner_reference,
+            )
+            .await?;
+            tls::seed_machine_certs(&client, &owner_reference, tls::trustee_ca(&secret)?).await?;
+            (
+                Some(tls::tls_volume(tls::MANAGED_TRUSTEE_TLS)),
+                Some(tls::trustee_revision(&secret)?),
+            )
         }
-        None => None,
+        None => (None, None),
     };
     install_trustee_resources(
         client.clone(),
@@ -550,9 +600,15 @@ async fn install_trustee_configuration(
     )
     .await?;
     let trustee_image = get_env(RELATED_IMAGE_TRUSTEE)?;
-    trustee::generate_kbs_deployment(client, owner_reference, &trustee_image, tls_volumes)
-        .await
-        .context("Failed to create the KBS deployment")?;
+    trustee::generate_kbs_deployment(
+        client,
+        owner_reference,
+        &trustee_image,
+        tls_volumes,
+        tls_revision,
+    )
+    .await
+    .context("Failed to create the KBS deployment")?;
     info!("Generated the KBS deployment");
     Ok(())
 }
@@ -734,7 +790,46 @@ async fn main() -> Result<()> {
     #[cfg(feature = "openshift")]
     openshift_images::launch_rv_mc_controller(ctx.clone()).await;
 
-    Controller::new(cl, watcher::Config::default())
+    let controller = Controller::new(cl, watcher::Config::default());
+    let tecs = controller.store();
+    controller
+        .owns(
+            Api::<Machine>::default_namespaced(kube_client.clone()),
+            Default::default(),
+        )
+        .owns(
+            Api::<DaemonSet>::default_namespaced(kube_client.clone()),
+            Default::default(),
+        )
+        .owns(
+            Api::<Deployment>::default_namespaced(kube_client.clone()),
+            Default::default(),
+        )
+        .owns(
+            Api::<ConfigMap>::default_namespaced(kube_client.clone()),
+            Default::default(),
+        )
+        .watches(
+            Api::<Secret>::default_namespaced(kube_client),
+            Default::default(),
+            move |secret| {
+                let name = secret.name_any();
+                tecs.state()
+                    .into_iter()
+                    .filter(|tec| {
+                        name == tls::MANAGED_TRUSTEE_TLS
+                            || [
+                                &tec.spec.trustee_secret,
+                                &tec.spec.register_server_secret,
+                                &tec.spec.attestation_key_register_secret,
+                            ]
+                            .iter()
+                            .any(|configured| configured.as_deref() == Some(&name))
+                    })
+                    .map(|tec| ObjectRef::from_obj(tec.as_ref()))
+                    .collect::<Vec<_>>()
+            },
+        )
         .run(reconcile, controller_error_policy, ctx)
         .for_each(controller_info)
         .await;
@@ -1037,7 +1132,7 @@ mod tests {
         });
     }
 
-    // Tests the installed condition is set to True when the operator version is the same as the component version.
+    // The installed cluster schedules the machine daemon and publishes its TLS condition.
     #[tokio::test]
     async fn test_reconcile_installed_same_version_returns_long_requeue() {
         let installed = Condition {
@@ -1049,9 +1144,24 @@ mod tests {
             observed_generation: None,
         };
 
-        let clos = async |req: Request<Body>, _| panic!("unexpected API call: {req:?}");
+        let clos = async |req: Request<Body>, ctr| {
+            assert_eq!(req.method(), Method::PATCH);
+            if ctr == 0 {
+                assert!(
+                    req.uri()
+                        .path()
+                        .ends_with("/daemonsets/trusted-cluster-machine-daemon")
+                );
+                Ok(serde_json::to_string(&DaemonSet::default()).unwrap())
+            } else {
+                let body = get_body_string(req).await;
+                assert!(body.contains(CERTS_UPDATED_CONDITION));
+                assert!(body.contains(CERTS_UPDATED_REASON));
+                Ok(serde_json::to_string(&dummy_cluster()).unwrap())
+            }
+        };
 
-        count_check!(0, clos, |client| {
+        count_check!(2, clos, |client| {
             let mut cluster = dummy_cluster();
             cluster.status = Some(TrustedExecutionClusterStatus {
                 conditions: Some(vec![installed]),

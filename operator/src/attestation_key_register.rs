@@ -22,18 +22,14 @@ use log::{info, warn};
 use serde_json::json;
 use std::{collections::BTreeMap, sync::Arc};
 
-use trusted_cluster_operator_lib::conditions::ATTESTATION_KEY_MACHINE_APPROVE;
-use trusted_cluster_operator_lib::endpoints::*;
-use trusted_cluster_operator_lib::{
-    ATTESTATION_KEY_SECRET_FINALIZER, AttestationKey, Machine, record_event,
-};
+use trusted_cluster_operator_lib::{endpoints::*, *, conditions::*};
 
 use crate::conditions::{attestation_key_approved_condition, machine_ak_approved_condition};
-use crate::tls::{registration_tls_args, tls_volume};
+use crate::tls::{registration_tls, registration_tls_args};
 use crate::trustee;
 use operator::{
     ControllerError, KIND_LABEL_KEY, LONG_REQUEUE, OperatorContext, controller_error_policy,
-    create_or_info_if_exists, patch_status_condition, read_certificate,
+    create_or_info_if_exists, patch_status_condition,
 };
 
 const INTERNAL_ATTESTATION_KEY_REGISTER_PORT: i32 = 8001;
@@ -52,10 +48,8 @@ pub async fn create_attestation_key_register_deployment(
         "--port".to_string(),
         ATTESTATION_KEY_REGISTER_PORT.to_string(),
     ];
-    let volumes = read_certificate(client.clone(), secret)
-        .await?
-        .map(tls_volume);
-    if volumes.is_some() {
+    let tls = registration_tls(&client, secret).await?;
+    if tls.is_some() {
         args.extend(registration_tls_args());
     }
 
@@ -74,6 +68,9 @@ pub async fn create_attestation_key_register_deployment(
             template: PodTemplateSpec {
                 metadata: Some(ObjectMeta {
                     labels: Some(labels.clone()),
+                    annotations: tls.as_ref().map(|(_, _, revision)| {
+                        BTreeMap::from([(TLS_REVISION.to_string(), revision.clone())])
+                    }),
                     ..Default::default()
                 }),
                 spec: Some(PodSpec {
@@ -86,10 +83,10 @@ pub async fn create_attestation_key_register_deployment(
                             ..Default::default()
                         }]),
                         args: Some(args),
-                        volume_mounts: volumes.as_ref().map(|(_, vm)| vec![vm.clone()]),
+                        volume_mounts: tls.as_ref().map(|(_, mount, _)| vec![mount.clone()]),
                         ..Default::default()
                     }],
-                    volumes: volumes.as_ref().map(|(v, _)| vec![v.clone()]),
+                    volumes: tls.map(|(volume, _, _)| vec![volume]),
                     ..Default::default()
                 }),
             },

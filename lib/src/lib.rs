@@ -48,6 +48,10 @@ pub const ATTESTATION_KEY_SECRET_FINALIZER: &str =
     "trusted-execution-clusters.io/attestationkey-secret-finalizer";
 /// Path where the machine daemon's DaemonSet mounts the node's root filesystem
 pub const MACHINE_DAEMON_HOST_ROOT: &str = "/host";
+/// Label to be added to confidential nodes
+pub const MACHINE_NODE_LABEL: &str = "trusted-execution-clusters.io/machine";
+/// Deployment annotation for the TLS revision used
+pub const TLS_REVISION: &str = "trusted-execution-clusters.io/tls-revision";
 
 #[macro_export]
 macro_rules! update_status {

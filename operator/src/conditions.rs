@@ -4,7 +4,7 @@
 
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
 use trusted_cluster_operator_lib::{
-    AttestationKeyStatus, MachineStatus, TrustedExecutionClusterStatus,
+    AttestationKeyStatus, MachineStatus, TrustedExecutionCluster, TrustedExecutionClusterStatus,
 };
 use trusted_cluster_operator_lib::{condition_status, conditions::*, transition_time};
 
@@ -54,6 +54,26 @@ pub fn installed_condition(
         last_transition_time: transition_time(existing_status, type_, &status),
         status,
         observed_generation: generation,
+    }
+}
+
+/// Builds the TEC's `CertsUpdated` condition for a rollout reason. Uses the
+/// cluster's generation and previous status to set the observation and transition
+/// fields. The returned condition is true when the reason is `Updated`.
+pub fn certs_condition(cluster: &TrustedExecutionCluster, reason: &str) -> Condition {
+    let status = condition_status(reason == CERTS_UPDATED_REASON);
+    Condition {
+        type_: CERTS_UPDATED_CONDITION.to_string(),
+        reason: reason.to_string(),
+        message: match reason {
+            CERTS_ADDING_NEW_REASON => "Waiting for machines to install the new Trustee CA",
+            CERTS_REVOKING_OLD_REASON => "Rolling out the new Trustee TLS credentials",
+            _ => "",
+        }
+        .to_string(),
+        last_transition_time: transition_time(&cluster.status, CERTS_UPDATED_CONDITION, &status),
+        status,
+        observed_generation: cluster.metadata.generation,
     }
 }
 
