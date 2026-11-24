@@ -174,18 +174,24 @@ fn get_auth_key_token(ctx: &OperatorContext) -> Result<String> {
 
 fn get_kbs_connection(ctx: &OperatorContext) -> Result<(String, Vec<String>)> {
     let tec = ctx.get_opt_tec()?.context("no TEC found")?;
-    let obj_ref = |name: &str| ObjectRef::new(name).within(ctx.client.default_namespace());
+    let namespace = ctx.client.default_namespace();
 
-    if let Some(secret_name) = &tec.spec.trustee_secret {
-        let err_ctx =
-            format!("cluster specified Trustee secret {secret_name}, but it did not exist");
-        let obj_ref = obj_ref(secret_name);
-        let secret = ctx.secret_store.get(&obj_ref).context(err_ctx)?;
-        let err_ctx = format!("Trustee secret {secret_name} did not have ca.crt");
-        let secret_data = secret.data.as_ref();
-        let ca_crt = secret_data.and_then(|d| d.get("ca.crt")).context(err_ctx)?;
-        let ca_pem =
-            String::from_utf8(ca_crt.0.clone()).context("ca certificate is not valid UTF-8")?;
+    if let Some(configured) = &tec.spec.trustee_secret {
+        let deployment = ctx
+            .deployment_store
+            .get(&ObjectRef::new(TRUSTEE_DEPLOYMENT).within(namespace));
+        let source_name = match deployment.as_deref() {
+            Some(deployment) => crate::tls::tls_mount(deployment)?
+                .map(|(volume, _)| crate::tls::mounted_secret(volume))
+                .transpose()?
+                .unwrap_or(configured),
+            None => configured,
+        };
+        let secret = ctx
+            .secret_store
+            .get(&ObjectRef::new(source_name).within(namespace))
+            .with_context(|| format!("Trustee Secret {source_name} is missing"))?;
+        let ca = crate::tls::trustee_ca(&secret)?;
         let trustee_addr = format!(
             "https://{}",
             tec.spec
@@ -193,7 +199,7 @@ fn get_kbs_connection(ctx: &OperatorContext) -> Result<(String, Vec<String>)> {
                 .as_ref()
                 .context("TrustedExecutionCluster missing public_trustee_addr HTTPS")?
         );
-        return Ok((trustee_addr, vec![ca_pem]));
+        return Ok((trustee_addr, vec![ca.to_string()]));
     }
 
     Ok((

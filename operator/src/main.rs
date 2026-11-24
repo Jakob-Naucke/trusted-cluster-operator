@@ -178,8 +178,8 @@ async fn handle_upgrade(
         .as_ref()
         .and_then(|s| s.observed_operator_version.as_deref());
 
-    // No need to upgrade if the version is the same as the COMPONENT_VERSION.
     if observed == Some(COMPONENT_VERSION) {
+        tls::migrate_trustee_secret(&ctx.client, cluster).await?;
         return Ok(Some(LONG_REQUEUE));
     }
 
@@ -414,14 +414,18 @@ async fn converge_trustee(
         // Deployment or trustee-data ConfigMap is not deleted: old pods mount that
         // ConfigMap, and RollingUpdate (maxUnavailable=0) keeps them serving if the new image never becomes Ready.
 
-        install_trustee_configuration(client.clone(), cluster)
-            .await
-            .context("Failed to converge Trustee configuration")?;
-
         let owner_reference = generate_owner_reference(cluster)?;
-        let tls_volumes = read_certificate(client.clone(), &cluster.spec.trustee_secret)
-            .await?
-            .map(tls::tls_volume);
+        let tls_volumes = tls::tls_mount(&trustee_depl)?
+            .map(|(volume, mount)| (volume.clone(), mount.clone()));
+        install_trustee_resources(
+            client.clone(),
+            cluster,
+            &owner_reference,
+            tls_volumes.is_some(),
+        )
+        .await
+        .context("Failed to converge Trustee configuration")?;
+
         trustee::apply_kbs_deployment(client.clone(), owner_reference, &desired_image, tls_volumes)
             .await
             .context("Failed to apply Trustee Deployment")?;
@@ -528,33 +532,41 @@ async fn install_trustee_configuration(
     cluster: &TrustedExecutionCluster,
 ) -> Result<()> {
     let owner_reference = generate_owner_reference(cluster)?;
-
-    install_trustee_resources(client.clone(), cluster, &owner_reference).await?;
-
+    let tls_volumes = match cluster.spec.trustee_secret.as_deref() {
+        Some(configured) => {
+            let deployments: Api<Deployment> = Api::default_namespaced(client.clone());
+            let deployment = deployments.get_opt(TRUSTEE_DEPLOYMENT).await?;
+            tls::ensure_trustee_secret(&client, configured, deployment.as_ref(), &owner_reference)
+                .await?;
+            Some(tls::tls_volume(tls::MANAGED_TRUSTEE_TLS))
+        }
+        None => None,
+    };
+    install_trustee_resources(
+        client.clone(),
+        cluster,
+        &owner_reference,
+        tls_volumes.is_some(),
+    )
+    .await?;
     let trustee_image = get_env(RELATED_IMAGE_TRUSTEE)?;
-    let tls_volumes = read_certificate(client.clone(), &cluster.spec.trustee_secret)
-        .await?
-        .map(tls::tls_volume);
     trustee::generate_kbs_deployment(client, owner_reference, &trustee_image, tls_volumes)
         .await
         .context("Failed to create the KBS deployment")?;
     info!("Generated the KBS deployment");
-
     Ok(())
 }
 
 /// Prepares the KBS configuration, auth Secret, and Service for an install or upgrade.
 /// Uses the client's default namespace, the cluster's KBS port, the supplied owner
-/// reference to create resources. Returns success once all three
+/// reference, and `has_certificate` to select HTTPS. Returns success once all three
 /// resources are ready for the Deployment to reference.
 async fn install_trustee_resources(
     client: Client,
     cluster: &TrustedExecutionCluster,
     owner_reference: &OwnerReference,
+    has_certificate: bool,
 ) -> Result<()> {
-    let has_certificate = read_certificate(client.clone(), &cluster.spec.trustee_secret)
-        .await?
-        .is_some();
     trustee::generate_trustee_data(client.clone(), owner_reference.clone(), has_certificate)
         .await
         .context("Failed to create the KBS configuration configmap")?;
@@ -746,6 +758,11 @@ mod tests {
     // Compatibility paths that can be removed after 0.5.
     // - Backfill labels on legacy AttestationKey Secrets in
     //   `attestation_key_register::ensure_secret_label`.
+    // - Seed the managed TLS Secret from legacy Trustee mounts in
+    //   `tls::ensure_trustee_secret` and switch those mounts in
+    //   `tls::reconcile_trustee`. Keep hash-mismatch recovery for interrupted rotations.
+    // - Preserve legacy direct mounts during image upgrades in `converge_trustee`.
+    // - Read the CA from legacy direct mounts in `trustee::get_kbs_connection`.
     #[test]
     fn test_operator_version_below_0_5() {
         let version = env!("CARGO_PKG_VERSION");
