@@ -34,10 +34,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::tls::tls_volume;
 use compute_pcrs_lib::tpmevents::combine::combine_images;
 use operator::{ControllerError, OperatorContext, TLS_DIR, controller_error_policy};
-use operator::{controller_info, create_or_info_if_exists, read_certificate};
+use operator::{controller_info, create_or_info_if_exists};
 use trusted_cluster_operator_lib::conditions::COMMITTED_CONDITION;
 use trusted_cluster_operator_lib::reference_values::status_to_tpm_events;
 use trusted_cluster_operator_lib::{ApprovedImage, ApprovedImageStatusPcrs, endpoints::*};
@@ -516,9 +515,8 @@ fn generate_kbs_config(has_certificate: bool) -> Result<String> {
 pub async fn generate_trustee_data(
     client: Client,
     owner_reference: OwnerReference,
-    secret: &Option<String>,
+    has_certificate: bool,
 ) -> Result<()> {
-    let has_certificate = read_certificate(client.clone(), secret).await?.is_some();
     let kbs_config = generate_kbs_config(has_certificate)?;
 
     let data = BTreeMap::from([("kbs-config.toml".to_string(), kbs_config)]);
@@ -669,20 +667,18 @@ fn generate_kbs_pod_spec(image: &str, tls_volumes: Option<(Volume, VolumeMount)>
     }
 }
 
-async fn build_kbs_deployment(
-    client: Client,
+fn build_kbs_deployment(
     owner_reference: OwnerReference,
     image: &str,
-    secret: &Option<String>,
-) -> Result<Deployment> {
+    tls_volumes: Option<(Volume, VolumeMount)>,
+) -> Deployment {
     let selector = Some(BTreeMap::from([(
         "app".to_string(),
         TRUSTEE_APP_LABEL.to_string(),
     )]));
-    let tls_volumes = read_certificate(client, secret).await?.map(tls_volume);
     let pod_spec = generate_kbs_pod_spec(image, tls_volumes);
 
-    Ok(Deployment {
+    Deployment {
         metadata: ObjectMeta {
             name: Some(TRUSTEE_DEPLOYMENT.to_string()),
             labels: selector.clone(),
@@ -713,7 +709,7 @@ async fn build_kbs_deployment(
             ..Default::default()
         }),
         ..Default::default()
-    })
+    }
 }
 
 // Called during initial install.
@@ -721,9 +717,9 @@ pub async fn generate_kbs_deployment(
     client: Client,
     owner_reference: OwnerReference,
     image: &str,
-    secret: &Option<String>,
+    tls_volumes: Option<(Volume, VolumeMount)>,
 ) -> Result<()> {
-    let deployment = build_kbs_deployment(client.clone(), owner_reference, image, secret).await?;
+    let deployment = build_kbs_deployment(owner_reference, image, tls_volumes);
     create_or_info_if_exists(client, &deployment).await
 }
 
@@ -733,9 +729,9 @@ pub async fn apply_kbs_deployment(
     client: Client,
     owner_reference: OwnerReference,
     image: &str,
-    secret: &Option<String>,
+    tls_volumes: Option<(Volume, VolumeMount)>,
 ) -> Result<()> {
-    let deployment = build_kbs_deployment(client.clone(), owner_reference, image, secret).await?;
+    let deployment = build_kbs_deployment(owner_reference, image, tls_volumes);
     let deployments: Api<Deployment> = Api::default_namespaced(client);
     deployments
         .patch(
@@ -974,7 +970,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_generate_trustee_data_success() {
-        let clos = |client| generate_trustee_data(client, Default::default(), &None);
+        let clos = |client| generate_trustee_data(client, Default::default(), false);
         let server = async |req: Request<_>, ctr| match (ctr, req.method()) {
             (0, &Method::GET) => Err(StatusCode::NOT_FOUND),
             (1, &Method::POST) => Ok(serde_json::to_string(&ConfigMap::default()).unwrap()),
@@ -987,7 +983,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_generate_trustee_data_already_exists() {
-        let clos = |client| generate_trustee_data(client, Default::default(), &None);
+        let clos = |client| generate_trustee_data(client, Default::default(), false);
         let server = async |req: Request<_>, ctr| match (ctr, req.method()) {
             (0, &Method::GET) => Ok(serde_json::to_string(&ConfigMap::default()).unwrap()),
             (1, &Method::PATCH) => Ok(serde_json::to_string(&ConfigMap::default()).unwrap()),
@@ -1000,7 +996,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_generate_trustee_data_error() {
-        let clos = |client| generate_trustee_data(client, Default::default(), &None);
+        let clos = |client| generate_trustee_data(client, Default::default(), false);
         let server = async |req: Request<_>, ctr| match (ctr, req.method()) {
             (0, &Method::GET) => Ok(serde_json::to_string(&ConfigMap::default()).unwrap()),
             (1, &Method::PATCH) => Err(StatusCode::INTERNAL_SERVER_ERROR),
@@ -1025,13 +1021,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_generate_kbs_depl_success() {
-        let clos = |client| generate_kbs_deployment(client, Default::default(), "image", &None);
+        let clos = |client| generate_kbs_deployment(client, Default::default(), "image", None);
         test_create_success::<_, _, Deployment>(clos).await;
     }
 
     #[tokio::test]
     async fn test_generate_kbs_depl_error() {
-        let clos = |client| generate_kbs_deployment(client, Default::default(), "image", &None);
+        let clos = |client| generate_kbs_deployment(client, Default::default(), "image", None);
         test_error_method!(clos, Method::POST);
     }
 

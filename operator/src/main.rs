@@ -419,15 +419,12 @@ async fn converge_trustee(
             .context("Failed to converge Trustee configuration")?;
 
         let owner_reference = generate_owner_reference(cluster)?;
-        let trustee_secret = &cluster.spec.trustee_secret;
-        trustee::apply_kbs_deployment(
-            client.clone(),
-            owner_reference,
-            &desired_image,
-            trustee_secret,
-        )
-        .await
-        .context("Failed to apply Trustee Deployment")?;
+        let tls_volumes = read_certificate(client.clone(), &cluster.spec.trustee_secret)
+            .await?
+            .map(tls::tls_volume);
+        trustee::apply_kbs_deployment(client.clone(), owner_reference, &desired_image, tls_volumes)
+            .await
+            .context("Failed to apply Trustee Deployment")?;
         info!("Trustee resources updated for upgrade to {desired_image}");
     }
 
@@ -532,11 +529,13 @@ async fn install_trustee_configuration(
 ) -> Result<()> {
     let owner_reference = generate_owner_reference(cluster)?;
 
-    let trustee_secret = &cluster.spec.trustee_secret;
     install_trustee_resources(client.clone(), cluster, &owner_reference).await?;
 
     let trustee_image = get_env(RELATED_IMAGE_TRUSTEE)?;
-    trustee::generate_kbs_deployment(client, owner_reference, &trustee_image, trustee_secret)
+    let tls_volumes = read_certificate(client.clone(), &cluster.spec.trustee_secret)
+        .await?
+        .map(tls::tls_volume);
+    trustee::generate_kbs_deployment(client, owner_reference, &trustee_image, tls_volumes)
         .await
         .context("Failed to create the KBS deployment")?;
     info!("Generated the KBS deployment");
@@ -553,8 +552,10 @@ async fn install_trustee_resources(
     cluster: &TrustedExecutionCluster,
     owner_reference: &OwnerReference,
 ) -> Result<()> {
-    let trustee_secret = &cluster.spec.trustee_secret;
-    trustee::generate_trustee_data(client.clone(), owner_reference.clone(), trustee_secret)
+    let has_certificate = read_certificate(client.clone(), &cluster.spec.trustee_secret)
+        .await?
+        .is_some();
+    trustee::generate_trustee_data(client.clone(), owner_reference.clone(), has_certificate)
         .await
         .context("Failed to create the KBS configuration configmap")?;
     info!("Generated configmap for the KBS configuration");
