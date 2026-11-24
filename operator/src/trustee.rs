@@ -656,7 +656,7 @@ fn generate_kbs_pod_spec(image: &str, tls_volumes: Option<(Volume, VolumeMount)>
                 ..Default::default()
             }]),
             image: Some(image.to_string()),
-            name: "kbs".to_string(),
+            name: TRUSTEE_CONTAINER.to_string(),
             ports: Some(vec![ContainerPort {
                 container_port: TRUSTEE_PORT,
                 ..Default::default()
