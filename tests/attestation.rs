@@ -238,7 +238,8 @@ async fn test_vm_reboot_delete_machine() -> anyhow::Result<()> {
     let _reboot_result = att_ctx.backend.ssh_exec("sudo systemctl reboot").await;
 
     test_ctx.info("Waiting for SSH access after machine removal");
-    let wait = att_ctx.backend.wait_for_vm_ssh_ready(scaled_timeout(300), Some(&boot_id)).await;
+    // Use unscaled timeout. Larger timeouts cause a lot of waiting time because we expect to not boot.
+    let wait = att_ctx.backend.wait_for_vm_ssh_ready(360, Some(&boot_id)).await;
     assert!(wait.is_err());
 
     att_ctx.cleanup().await?;
