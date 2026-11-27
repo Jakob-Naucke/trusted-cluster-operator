@@ -182,9 +182,9 @@ async fn test_parallel_vm_attestation() -> anyhow::Result<()> {
 }
 
 virt_test! {
-async fn test_vm_reboot_attestation() -> anyhow::Result<()> {
+async fn test_vm_reboot() -> anyhow::Result<()> {
     let test_ctx = setup!().await?;
-    test_ctx.info("Testing VM reboot - VM should successfully boot after multiple reboots");
+    test_ctx.info("Testing VM reboot - VM should be able to reboot, and not boot after its Machine CRD was removed");
     let vm_name = "test-coreos-reboot";
     let att_ctx = SingleAttestationContext::new(vm_name, &test_ctx).await?;
 
@@ -214,18 +214,6 @@ async fn test_vm_reboot_attestation() -> anyhow::Result<()> {
     test_ctx.info(format!(
         "VM successfully rebooted {num_reboots} times with encrypted root device maintained"
     ));
-    att_ctx.cleanup().await?;
-    test_ctx.cleanup().await?;
-    Ok(())
-}
-}
-
-virt_test! {
-async fn test_vm_reboot_delete_machine() -> anyhow::Result<()> {
-    let test_ctx = setup!().await?;
-    test_ctx.info("Testing Machine deletion - VM should no longer boot successfully when its Machine CRD was removed");
-    let vm_name = "test-coreos-delete";
-    let att_ctx = SingleAttestationContext::new(vm_name, &test_ctx).await?;
 
     let machines: Api<Machine> = Api::namespaced(test_ctx.client().clone(), test_ctx.namespace());
     let list = machines.list(&Default::default()).await?;
@@ -237,7 +225,7 @@ async fn test_vm_reboot_delete_machine() -> anyhow::Result<()> {
     let boot_id = att_ctx.backend.get_boot_id().await?;
     let _reboot_result = att_ctx.backend.ssh_exec("sudo systemctl reboot").await;
 
-    test_ctx.info("Waiting for SSH access after machine removal");
+    test_ctx.info("Waiting for lack of SSH access after machine removal");
     // Use unscaled timeout. Larger timeouts cause a lot of waiting time because we expect to not boot.
     let wait = att_ctx.backend.wait_for_vm_ssh_ready(360, Some(&boot_id)).await;
     assert!(wait.is_err());
