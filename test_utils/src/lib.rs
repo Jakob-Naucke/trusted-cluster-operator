@@ -10,17 +10,15 @@ use glob::glob;
 use k8s_openapi::api::apps::v1::Deployment;
 use k8s_openapi::api::core::v1::{Namespace, Pod, Secret, Service};
 use k8s_openapi::api::events::v1::Event;
-use kube::api::{DeleteParams, ListParams, ObjectMeta, Patch, PatchParams};
+use kube::api::{DeleteParams, ListParams, Patch, PatchParams};
 use kube::runtime::wait::{await_condition, conditions::is_created};
 use kube::{Api, Client};
-use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
 use serde_json::json;
 use std::path::{Path, PathBuf};
 use std::{collections::BTreeMap, env, sync::Once, time::Duration};
 use tokio::process::Command;
 use tokio::time::timeout;
 
-use trusted_cluster_operator_lib::{certificates::*, issuers::*};
 use trusted_cluster_operator_lib::{conditions::*, endpoints::*, images::*, *};
 pub use trusted_cluster_operator_lib::{
     deployment_rollout_complete, wait_for_deployment_rollout, wait_for_resource_deleted,
@@ -32,6 +30,8 @@ pub mod constants;
 mod k8s_platform;
 pub mod mock_client;
 use k8s_platform::*;
+pub mod tls;
+use tls::*;
 
 #[cfg(feature = "virtualization")]
 pub mod virt;
@@ -49,13 +49,6 @@ const PLATFORM_ENV: &str = "PLATFORM";
 const YELLOW: &str = "\x1b[33m";
 const ANSI_RESET: &str = "\x1b[0m";
 
-const ROOT_SECRET: &str = "root-secret";
-const REG_SECRET: &str = "reg-srv-secret";
-const TRUSTEE_SECRET: &str = "trustee-secret";
-const ATT_REG_SECRET: &str = "att-reg-secret";
-const REG_CERT: &str = "reg-srv-cert";
-const TRUSTEE_CERT: &str = "trustee-cert";
-const ATT_REG_CERT: &str = "att-reg-cert";
 pub const OPERATOR_DEPLOYMENT: &str = "trusted-cluster-operator";
 
 // Registry path component names, distinct from the Kubernetes resource names in `endpoints`
@@ -203,17 +196,6 @@ fn kubectl() -> Command {
         "openshift" => Command::new("oc"),
         _ => Command::new("kubectl"),
     }
-}
-
-pub async fn get_encoded_root_pem(client: Client, namespace: &str) -> Result<String> {
-    let secrets: Api<Secret> = Api::namespaced(client.clone(), namespace);
-    let root_secret = secrets.get(ROOT_SECRET).await?;
-    let ctx = format!("Root secret {ROOT_SECRET} had no ca.crt");
-    let root_secret_data = root_secret.data.context(ctx.clone())?;
-    let ca_pem_bytes = root_secret_data.get("ca.crt").context(ctx)?;
-    let root_pem = String::from_utf8(ca_pem_bytes.0.clone())?;
-    let encoded = utf8_percent_encode(&root_pem, NON_ALPHANUMERIC);
-    Ok(format!("data:,{encoded}"))
 }
 
 static INIT: Once = Once::new();
@@ -511,104 +493,6 @@ impl TestContext {
         Ok(())
     }
 
-    async fn create_certificate(
-        &self,
-        service_name: &str,
-        cert_name: &str,
-        secret_name: &str,
-        issuer_name: &str,
-    ) -> Result<()> {
-        let ns = &self.test_namespace;
-        let domain = get_cluster_url(&self.client, ns, service_name, None).await?;
-        let certs: Api<Certificate> = Api::namespaced(self.client.clone(), ns);
-        let cert = Certificate {
-            metadata: ObjectMeta {
-                name: Some(cert_name.to_string()),
-                ..Default::default()
-            },
-            spec: CertificateSpec {
-                secret_name: secret_name.to_string(),
-                issuer_ref: CertificateIssuerRef {
-                    name: issuer_name.to_string(),
-                    ..Default::default()
-                },
-                dns_names: Some(vec![domain]),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        certs.create(&Default::default(), &cert).await?;
-        Ok(())
-    }
-
-    async fn set_certificates(&self) -> anyhow::Result<()> {
-        let ns = &self.test_namespace;
-        let root_issuer_name = "root-issuer";
-        let root_issuer = Issuer {
-            metadata: ObjectMeta {
-                name: Some(root_issuer_name.to_string()),
-                ..Default::default()
-            },
-            spec: IssuerSpec {
-                self_signed: Some(Default::default()),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        let issuers: Api<Issuer> = Api::namespaced(self.client.clone(), ns);
-        issuers.create(&Default::default(), &root_issuer).await?;
-        let root_cert = Certificate {
-            metadata: ObjectMeta {
-                name: Some("root-cert".to_string()),
-                ..Default::default()
-            },
-            spec: CertificateSpec {
-                secret_name: ROOT_SECRET.to_string(),
-                is_ca: Some(true),
-                issuer_ref: CertificateIssuerRef {
-                    name: root_issuer_name.to_string(),
-                    ..Default::default()
-                },
-                common_name: Some("selfsigned-ca".to_string()),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        let certs: Api<Certificate> = Api::namespaced(self.client.clone(), ns);
-        certs.create(&Default::default(), &root_cert).await?;
-        let issuer_name = "issuer";
-        let issuer = Issuer {
-            metadata: ObjectMeta {
-                name: Some(issuer_name.to_string()),
-                ..Default::default()
-            },
-            spec: IssuerSpec {
-                ca: Some(IssuerCa {
-                    secret_name: ROOT_SECRET.to_string(),
-                    ..Default::default()
-                }),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        issuers.create(&Default::default(), &issuer).await?;
-
-        let svc = REGISTER_SERVER_SERVICE;
-        self.create_certificate(svc, REG_CERT, REG_SECRET, issuer_name)
-            .await?;
-        self.create_certificate(TRUSTEE_SERVICE, TRUSTEE_CERT, TRUSTEE_SECRET, issuer_name)
-            .await?;
-        let svc = ATTESTATION_KEY_REGISTER_SERVICE;
-        self.create_certificate(svc, ATT_REG_CERT, ATT_REG_SECRET, issuer_name)
-            .await?;
-
-        let secrets: Api<Secret> = Api::namespaced(self.client.clone(), &self.test_namespace);
-        for secret in [REG_SECRET, TRUSTEE_SECRET, ATT_REG_SECRET] {
-            wait_for_resource_created(&secrets, secret, scaled_timeout(60)).await?;
-        }
-        Ok(())
-    }
-
     async fn generate_manifests(
         &self,
         workspace_root: &PathBuf,
@@ -720,7 +604,7 @@ impl TestContext {
             .await?;
         self.info("Manifests generated successfully");
 
-        self.set_certificates().await?;
+        set_certificates(&self.client, &self.test_namespace).await?;
         let tec = "trustedexecutionclusters.trusted-execution-clusters.io";
         let args = ["get", "crd", tec];
         let crd_check_output = kubectl().args(args).output().await?;
