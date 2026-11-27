@@ -11,9 +11,10 @@ use anyhow::{Context, Result};
 use k8s_openapi::api::apps::v1::Deployment;
 use kube::Api;
 use std::time::Duration;
-use trusted_cluster_operator_lib::{AttestationKey, Machine, TrustedExecutionCluster};
+use trusted_cluster_operator_lib::{*, endpoints::*};
 use trusted_cluster_operator_test_utils::constants::APPROVED_IMAGE_NAME;
 use trusted_cluster_operator_test_utils::virt::{self, VmBackend};
+use trusted_cluster_operator_test_utils::tls::{ATT_REG_CERT, REG_CERT, renew_certificate};
 use trusted_cluster_operator_test_utils::{Poller, wait_for_event};
 use tokio::time::timeout;
 use kube::runtime::wait::await_condition;
@@ -260,6 +261,47 @@ async fn test_vm_restart_operator() -> anyhow::Result<()> {
 
     existing_ctx.cleanup().await?;
     new_ctx.cleanup().await?;
+    test_ctx.cleanup().await?;
+    Ok(())
+}
+}
+
+virt_test! {
+async fn test_vm_boot_after_certificate_renewal() -> anyhow::Result<()> {
+    fn tls_revision(deployment: &Deployment) -> Option<&str> {
+        deployment.spec.as_ref()?.template.metadata.as_ref()?.annotations.as_ref()?
+            .get(TLS_REVISION)
+            .map(String::as_str)
+    }
+
+    let test_ctx = setup!().await?;
+    let client = test_ctx.client();
+    let namespace = test_ctx.namespace();
+    let deployments: Api<Deployment> = Api::namespaced(client.clone(), namespace);
+
+    for (cert, deployment) in [
+        (REG_CERT, REGISTER_SERVER_DEPLOYMENT),
+        (ATT_REG_CERT, ATTESTATION_KEY_REGISTER_DEPLOYMENT),
+    ] {
+        let initial = deployments.get(deployment).await?;
+        let revision = tls_revision(&initial)
+            .with_context(|| format!("{deployment} has no initial TLS revision"))?;
+        test_ctx.info(format!("Renewing {cert} and waiting for {deployment} rollout"));
+        renew_certificate(client, namespace, cert).await?;
+
+        let rolled_out = await_condition(deployments.clone(), deployment, |d: Option<&Deployment>| {
+            d.is_some_and(|d| {
+                tls_revision(d).is_some_and(|new| new != revision) && deployment_rollout_complete(d)
+            })
+        });
+        timeout(scaled_duration(300), rolled_out)
+            .await
+            .with_context(|| format!("waiting for {deployment} to roll out its renewed TLS certificate"))??;
+    }
+
+    let att_ctx = SingleAttestationContext::new("test-coreos-renewed-tls", &test_ctx).await?;
+    att_ctx.verify_encrypted_root().await.context(ENCRYPTED_ROOT_CTX)?;
+    att_ctx.cleanup().await?;
     test_ctx.cleanup().await?;
     Ok(())
 }

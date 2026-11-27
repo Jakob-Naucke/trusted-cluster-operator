@@ -4,10 +4,16 @@
 
 use anyhow::{Context, Result};
 use k8s_openapi::api::core::v1::Secret;
-use kube::{Api, Client, api::ObjectMeta};
+use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, Time};
+use k8s_openapi::jiff::Timestamp;
+use kube::api::{ObjectMeta, Patch};
+use kube::runtime::wait::await_condition;
+use kube::{Api, Client};
 use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
+use tokio::time::timeout;
 
-use crate::{k8s_platform::get_cluster_url, scaled_timeout, wait_for_resource_created};
+use crate::k8s_platform::get_cluster_url;
+use crate::{scaled_duration, scaled_timeout, wait_for_resource_created};
 use trusted_cluster_operator_lib::{certificates::*, endpoints::*, issuers::*};
 
 pub const ROOT_CERT: &str = "root-cert";
@@ -124,5 +130,37 @@ pub async fn set_certificates(client: &Client, namespace: &str) -> anyhow::Resul
     for secret in [REG_SECRET, TRUSTEE_SECRET, ATT_REG_SECRET] {
         wait_for_resource_created(&secrets, secret, scaled_timeout(60)).await?;
     }
+    Ok(())
+}
+
+pub async fn renew_certificate(client: &Client, namespace: &str, name: &str) -> Result<()> {
+    let certs: Api<Certificate> = Api::namespaced(client.clone(), namespace);
+    let cert = certs.get(name).await?;
+    let status = cert.status.unwrap_or_default();
+    let old_revision = status.revision.unwrap_or_default();
+    let mut conditions = status.conditions.unwrap_or_default();
+    conditions.retain(|condition| condition.type_ != "Issuing");
+    conditions.push(Condition {
+        type_: "Issuing".to_string(),
+        status: "True".to_string(),
+        reason: "ManuallyTriggered".to_string(),
+        message: "rolling for test".to_string(),
+        last_transition_time: Time(Timestamp::now()),
+        observed_generation: None,
+    });
+    let patch = Patch::Merge(&serde_json::json!({
+        "metadata": { "resourceVersion": cert.metadata.resource_version },
+        "status": { "conditions": conditions },
+    }));
+    let params = Default::default();
+    certs.patch_status(name, &params, &patch).await?;
+
+    let renewed = await_condition(certs, name, |cert: Option<&Certificate>| {
+        cert.and_then(|cert| cert.status.as_ref()?.revision)
+            .is_some_and(|revision| revision > old_revision)
+    });
+    timeout(scaled_duration(120), renewed)
+        .await
+        .context(format!("waiting for certificate {name} to renew"))??;
     Ok(())
 }
