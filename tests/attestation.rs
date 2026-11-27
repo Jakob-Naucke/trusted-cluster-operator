@@ -237,42 +237,29 @@ async fn test_vm_reboot() -> anyhow::Result<()> {
 }
 
 virt_test! {
-async fn test_vm_restart_operator_existing() -> anyhow::Result<()> {
+async fn test_vm_restart_operator() -> anyhow::Result<()> {
     let test_ctx = setup!().await?;
-    test_ctx.info("Testing operator restart - existing VM should still boot");
-    let vm_name = "test-coreos-operator-restart-existing";
-    let att_ctx = SingleAttestationContext::new(vm_name, &test_ctx).await?;
-
-    let deployments: Api<Deployment> =
-        Api::namespaced(test_ctx.client().clone(), test_ctx.namespace());
-    deployments.restart("trusted-cluster-operator").await?;
-
-    let boot_id = att_ctx.backend.get_boot_id().await?;
-    let _reboot_result = att_ctx.backend.ssh_exec("sudo systemctl reboot").await;
-
-    test_ctx.info("Waiting for SSH access after operator restart & reboot");
-    let wait = att_ctx.backend.wait_for_vm_ssh_ready(scaled_timeout(300), Some(&boot_id)).await;
-    assert!(wait.is_ok());
-
-    att_ctx.cleanup().await?;
-    test_ctx.cleanup().await?;
-    Ok(())
-}
-}
-
-virt_test! {
-async fn test_vm_restart_operator_new() -> anyhow::Result<()> {
-    let test_ctx = setup!().await?;
-    test_ctx.info("Testing operator restart - new VM should boot");
-    let vm_name = "test-coreos-operator-restart-new";
+    test_ctx.info("Testing operator restart - existing and new VMs should boot");
+    let existing_name = "test-coreos-operator-restart-existing";
+    let existing_ctx = SingleAttestationContext::new(existing_name, &test_ctx).await?;
 
     let deployments: Api<Deployment> =
         Api::namespaced(test_ctx.client().clone(), test_ctx.namespace());
     deployments.restart("trusted-cluster-operator").await?;
     test_ctx.info("Restarted operator deployment");
 
-    let att_ctx = SingleAttestationContext::new(vm_name, &test_ctx).await?;
-    att_ctx.cleanup().await?;
+    let new_name = "test-coreos-operator-restart-new";
+    let new_ctx = SingleAttestationContext::new(new_name, &test_ctx).await?;
+
+    let boot_id = existing_ctx.backend.get_boot_id().await?;
+    let _reboot_result = existing_ctx.backend.ssh_exec("sudo systemctl reboot").await;
+
+    test_ctx.info("Waiting for SSH access after operator restart & reboot");
+    let wait = existing_ctx.backend.wait_for_vm_ssh_ready(scaled_timeout(300), Some(&boot_id)).await;
+    assert!(wait.is_ok());
+
+    existing_ctx.cleanup().await?;
+    new_ctx.cleanup().await?;
     test_ctx.cleanup().await?;
     Ok(())
 }
